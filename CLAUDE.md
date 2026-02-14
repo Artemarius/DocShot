@@ -99,3 +99,4 @@ app/src/main/java/com/docshot/
 - Phase 1 complete: project skeleton builds, CameraX preview + OpenCV init working
 - Phase 2 complete: full classical CV pipeline (detect + rectify) working on static images, 10 unit tests passing
 - Phase 3 complete: real-time detection works well on dark/uniform backgrounds; fails on cluttered or low-contrast (light) backgrounds — deferred to Phase 7
+- Phase 4 complete: capture & rectify flow — tap shutter FAB → full-res pipeline (YUV→BGR → rotate → detect → sub-pixel refine → rectify) → result screen with original/rectified toggle, save to gallery (MediaStore), share via FileProvider. CameraX 3-use-case binding (Preview + ImageAnalysis + ImageCapture) with graceful fallback.

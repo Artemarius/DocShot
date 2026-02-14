@@ -1,8 +1,11 @@
 package com.docshot.ui
 
+import android.util.Log
 import android.util.Size
+import android.widget.Toast
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -12,7 +15,14 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -26,14 +36,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.docshot.R
 import com.docshot.util.rememberCameraPermissionState
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+
+private const val TAG = "DocShot:CameraScreen"
 
 @Composable
 fun CameraPermissionScreen() {
@@ -50,10 +64,28 @@ fun CameraPreview(viewModel: CameraViewModel = viewModel()) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val detectionState by viewModel.detectionState.collectAsState()
+    val cameraState by viewModel.cameraState.collectAsState()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
 
     DisposableEffect(Unit) {
         onDispose { analysisExecutor.shutdown() }
+    }
+
+    // If showing result, render ResultScreen instead of camera
+    if (cameraState is CameraUiState.Result) {
+        val resultData = (cameraState as CameraUiState.Result).data
+        ResultScreen(
+            data = resultData,
+            onSave = {
+                viewModel.saveResult(context) { success ->
+                    val msg = if (success) "Saved to gallery" else "Save failed"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onShare = { viewModel.shareResult(context) },
+            onRetake = { viewModel.resetToCamera() }
+        )
+        return
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -87,6 +119,49 @@ fun CameraPreview(viewModel: CameraViewModel = viewModel()) {
                     .align(Alignment.TopStart)
                     .padding(16.dp)
             )
+        }
+
+        // Capture FAB
+        val isIdle = cameraState is CameraUiState.Idle
+        val isBusy = cameraState is CameraUiState.Capturing || cameraState is CameraUiState.Processing
+
+        FloatingActionButton(
+            onClick = {
+                if (isIdle) viewModel.captureDocument(context)
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 32.dp)
+                .size(72.dp),
+            shape = CircleShape,
+            containerColor = if (isIdle) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp)
+        ) {
+            if (isBusy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(32.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    strokeWidth = 3.dp
+                )
+            } else {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_camera),
+                    contentDescription = "Capture document",
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+
+        // Error snackbar
+        if (cameraState is CameraUiState.Error) {
+            Snackbar(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp, start = 16.dp, end = 16.dp)
+            ) {
+                Text((cameraState as CameraUiState.Error).message)
+            }
         }
     }
 }
@@ -122,13 +197,32 @@ private fun bindCamera(
             .build()
             .also { it.setAnalyzer(analysisExecutor, viewModel.frameAnalyzer) }
 
+        val imageCapture = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            .build()
+
+        viewModel.imageCapture = imageCapture
+
         cameraProvider.unbindAll()
-        cameraProvider.bindToLifecycle(
-            lifecycleOwner,
-            CameraSelector.DEFAULT_BACK_CAMERA,
-            preview,
-            imageAnalysis
-        )
+        try {
+            cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                imageAnalysis,
+                imageCapture
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to bind 3 use cases, retrying without ImageCapture", e)
+            cameraProvider.unbindAll()
+            cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                imageAnalysis
+            )
+            viewModel.imageCapture = null
+        }
     }, ContextCompat.getMainExecutor(context))
 }
 
@@ -157,12 +251,12 @@ private fun QuadOverlay(
         val offsetY: Float
 
         if (srcAspect > canvasAspect) {
-            // Source is wider — scale by height, sides may be cropped
+            // Source is wider -- scale by height, sides may be cropped
             scale = size.height / srcH.toFloat()
             offsetX = (size.width - srcW * scale) / 2f
             offsetY = 0f
         } else {
-            // Source is taller — scale by width, top/bottom may be cropped
+            // Source is taller -- scale by width, top/bottom may be cropped
             scale = size.width / srcW.toFloat()
             offsetX = 0f
             offsetY = (size.height - srcH * scale) / 2f

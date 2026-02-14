@@ -1,9 +1,29 @@
 package com.docshot.ui
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.util.Log
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.docshot.camera.FrameAnalyzer
+import com.docshot.camera.processCapture
+import com.docshot.util.saveBitmapToGallery
+import com.docshot.util.shareImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private const val TAG = "DocShot:ViewModel"
 
 /**
  * UI state for the detected document overlay.
@@ -16,10 +36,31 @@ data class DetectionUiState(
     val detectionMs: Double = 0.0
 )
 
+/** State machine for the capture -> result flow. */
+sealed class CameraUiState {
+    data object Idle : CameraUiState()
+    data object Capturing : CameraUiState()
+    data class Processing(val message: String) : CameraUiState()
+    data class Result(val data: CaptureResultData) : CameraUiState()
+    data class Error(val message: String) : CameraUiState()
+}
+
+data class CaptureResultData(
+    val originalBitmap: Bitmap,
+    val rectifiedBitmap: Bitmap,
+    val pipelineMs: Double
+)
+
 class CameraViewModel : ViewModel() {
 
     private val _detectionState = MutableStateFlow(DetectionUiState())
     val detectionState: StateFlow<DetectionUiState> = _detectionState
+
+    private val _cameraState = MutableStateFlow<CameraUiState>(CameraUiState.Idle)
+    val cameraState: StateFlow<CameraUiState> = _cameraState
+
+    /** Set by CameraScreen when binding the camera. */
+    var imageCapture: ImageCapture? = null
 
     val frameAnalyzer = FrameAnalyzer { result ->
         _detectionState.value = DetectionUiState(
@@ -28,5 +69,105 @@ class CameraViewModel : ViewModel() {
             sourceHeight = result.sourceHeight,
             detectionMs = result.detectionMs
         )
+    }
+
+    /**
+     * Triggers the full capture pipeline: take photo -> detect -> refine -> rectify -> result.
+     */
+    fun captureDocument(context: Context) {
+        val capture = imageCapture ?: run {
+            Log.e(TAG, "ImageCapture not initialized")
+            return
+        }
+        if (_cameraState.value !is CameraUiState.Idle) return
+
+        _cameraState.value = CameraUiState.Capturing
+
+        capture.takePicture(
+            ContextCompat.getMainExecutor(context),
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(imageProxy: ImageProxy) {
+                    viewModelScope.launch(Dispatchers.Default) {
+                        _cameraState.value = CameraUiState.Processing("Processing document...")
+                        try {
+                            val result = processCapture(imageProxy)
+                            imageProxy.close()
+
+                            if (result != null) {
+                                _cameraState.value = CameraUiState.Result(
+                                    CaptureResultData(
+                                        originalBitmap = result.originalBitmap,
+                                        rectifiedBitmap = result.rectifiedBitmap,
+                                        pipelineMs = result.pipelineMs
+                                    )
+                                )
+                            } else {
+                                _cameraState.value = CameraUiState.Error("No document detected")
+                                resetAfterDelay()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Capture processing failed", e)
+                            imageProxy.close()
+                            _cameraState.value = CameraUiState.Error("Processing failed: ${e.message}")
+                            resetAfterDelay()
+                        }
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    Log.e(TAG, "Image capture failed", exception)
+                    _cameraState.value = CameraUiState.Error("Capture failed: ${exception.message}")
+                    viewModelScope.launch { resetAfterDelay() }
+                }
+            }
+        )
+    }
+
+    /** Saves the rectified bitmap to the device gallery. Returns true on success. */
+    fun saveResult(context: Context, onResult: (Boolean) -> Unit) {
+        val state = _cameraState.value
+        if (state !is CameraUiState.Result) return
+
+        viewModelScope.launch {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val displayName = "DocShot_$timestamp"
+            val uri = saveBitmapToGallery(context, state.data.rectifiedBitmap, displayName)
+            onResult(uri != null)
+        }
+    }
+
+    /** Shares the rectified bitmap via the system share sheet. */
+    fun shareResult(context: Context) {
+        val state = _cameraState.value
+        if (state !is CameraUiState.Result) return
+        shareImage(context, state.data.rectifiedBitmap)
+    }
+
+    /** Returns to camera preview and recycles bitmaps. */
+    fun resetToCamera() {
+        val state = _cameraState.value
+        if (state is CameraUiState.Result) {
+            state.data.originalBitmap.recycle()
+            state.data.rectifiedBitmap.recycle()
+        }
+        _cameraState.value = CameraUiState.Idle
+    }
+
+    private suspend fun resetAfterDelay() {
+        withContext(Dispatchers.Main) {
+            delay(2000)
+            if (_cameraState.value is CameraUiState.Error) {
+                _cameraState.value = CameraUiState.Idle
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        val state = _cameraState.value
+        if (state is CameraUiState.Result) {
+            state.data.originalBitmap.recycle()
+            state.data.rectifiedBitmap.recycle()
+        }
     }
 }
