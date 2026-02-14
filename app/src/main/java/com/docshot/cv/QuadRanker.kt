@@ -1,0 +1,138 @@
+package com.docshot.cv
+
+import android.util.Log
+import org.opencv.core.Point
+import org.opencv.imgproc.Imgproc
+import org.opencv.core.MatOfPoint2f
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.sqrt
+
+private const val TAG = "DocShot:QuadRank"
+
+// Scoring weights for quadrilateral ranking
+private const val WEIGHT_AREA = 0.5
+private const val WEIGHT_ANGLE = 0.5
+
+/**
+ * Picks the best quadrilateral from a list of candidates.
+ * Scoring uses a weighted combination of:
+ * - Area (largest preferred, normalized to image area)
+ * - Angle regularity (corners close to 90° preferred)
+ * Non-convex quads are rejected outright.
+ * Returns ordered corners [TL, TR, BR, BL] or null if no valid quad found.
+ */
+fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
+    val start = System.nanoTime()
+
+    var bestScore = -1.0
+    var bestQuad: List<Point>? = null
+
+    for (quad in candidates) {
+        // Reject non-convex quadrilaterals
+        val mat = MatOfPoint2f(*quad.toTypedArray())
+        val convex = Imgproc.isContourConvex(
+            org.opencv.core.MatOfPoint(*quad.toTypedArray())
+        )
+        mat.release()
+        if (!convex) continue
+
+        val area = quadArea(quad)
+        val areaScore = (area / imageArea).coerceIn(0.0, 1.0)
+
+        // Angle regularity: how close each interior angle is to 90°
+        val angleScore = angleRegularityScore(quad)
+
+        val score = WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore
+        if (score > bestScore) {
+            bestScore = score
+            bestQuad = quad
+        }
+    }
+
+    val ms = (System.nanoTime() - start) / 1_000_000.0
+    Log.d(TAG, "bestQuad: %.1f ms (candidates=%d, bestScore=%.3f)".format(ms, candidates.size, bestScore))
+
+    return bestQuad?.let { orderCorners(it) }
+}
+
+/**
+ * Computes the area of a quadrilateral using the shoelace formula.
+ */
+internal fun quadArea(points: List<Point>): Double {
+    val n = points.size
+    var area = 0.0
+    for (i in 0 until n) {
+        val j = (i + 1) % n
+        area += points[i].x * points[j].y
+        area -= points[j].x * points[i].y
+    }
+    return abs(area) / 2.0
+}
+
+/**
+ * Scores how close the four interior angles are to 90°.
+ * Returns 1.0 for a perfect rectangle, approaches 0.0 for degenerate shapes.
+ */
+internal fun angleRegularityScore(quad: List<Point>): Double {
+    require(quad.size == 4) { "Expected 4 points, got ${quad.size}" }
+    var totalDeviation = 0.0
+    for (i in 0 until 4) {
+        val prev = quad[(i + 3) % 4]
+        val curr = quad[i]
+        val next = quad[(i + 1) % 4]
+        val angle = interiorAngleDeg(prev, curr, next)
+        totalDeviation += abs(angle - 90.0)
+    }
+    // Max total deviation is 360° (degenerate), normalize so 0° deviation = 1.0
+    return (1.0 - totalDeviation / 360.0).coerceIn(0.0, 1.0)
+}
+
+/**
+ * Computes the interior angle at vertex `b` in degrees, given points a-b-c.
+ */
+private fun interiorAngleDeg(a: Point, b: Point, c: Point): Double {
+    val ba = doubleArrayOf(a.x - b.x, a.y - b.y)
+    val bc = doubleArrayOf(c.x - b.x, c.y - b.y)
+    val dot = ba[0] * bc[0] + ba[1] * bc[1]
+    val magBa = sqrt(ba[0] * ba[0] + ba[1] * ba[1])
+    val magBc = sqrt(bc[0] * bc[0] + bc[1] * bc[1])
+    if (magBa == 0.0 || magBc == 0.0) return 0.0
+    val cosAngle = (dot / (magBa * magBc)).coerceIn(-1.0, 1.0)
+    return Math.toDegrees(kotlin.math.acos(cosAngle))
+}
+
+/**
+ * Orders 4 points into consistent [TL, TR, BR, BL] order.
+ * Algorithm: TL has smallest (x+y), BR has largest (x+y),
+ * TR has smallest (y-x), BL has largest (y-x).
+ */
+fun orderCorners(points: List<Point>): List<Point> {
+    require(points.size == 4) { "Expected 4 points, got ${points.size}" }
+
+    val sums = DoubleArray(4) { points[it].x + points[it].y }
+    val diffs = DoubleArray(4) { points[it].y - points[it].x }
+
+    val tl = points[sums.indexOfMin()]
+    val br = points[sums.indexOfMax()]
+    val tr = points[diffs.indexOfMin()]
+    val bl = points[diffs.indexOfMax()]
+
+    return listOf(tl, tr, br, bl)
+}
+
+private fun DoubleArray.indexOfMin(): Int {
+    var minIdx = 0
+    for (i in 1 until size) {
+        if (this[i] < this[minIdx]) minIdx = i
+    }
+    return minIdx
+}
+
+private fun DoubleArray.indexOfMax(): Int {
+    var maxIdx = 0
+    for (i in 1 until size) {
+        if (this[i] > this[maxIdx]) maxIdx = i
+    }
+    return maxIdx
+}
