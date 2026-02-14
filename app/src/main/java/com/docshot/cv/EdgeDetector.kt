@@ -4,6 +4,7 @@ import android.util.Log
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDouble
 import org.opencv.core.Core
+import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 
 private const val TAG = "DocShot:Edge"
@@ -24,8 +25,11 @@ fun detectEdges(grayscale: Mat): Mat {
     val edges = Mat()
     Imgproc.Canny(grayscale, edges, low, high)
 
-    // Dilate slightly to close small gaps in document edges
-    Imgproc.dilate(edges, edges, Mat())
+    // Morphological close (dilate then erode) bridges gaps in document edges
+    // without bloating them — dilate-only tends to thicken text edges too much
+    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+    Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
+    kernel.release()
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
     Log.d(TAG, "detectEdges: %.1f ms (median=%.0f, low=%.0f, high=%.0f)".format(ms, median, low, high))

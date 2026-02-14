@@ -24,8 +24,8 @@ fun preprocess(input: Mat): Mat {
     }
 
     val blurred = Mat()
-    // 5x5 Gaussian removes sensor noise without destroying document edges
-    Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
+    // 9x9 Gaussian suppresses text/table edges so document boundary dominates
+    Imgproc.GaussianBlur(gray, blurred, Size(9.0, 9.0), 0.0)
     gray.release()
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
