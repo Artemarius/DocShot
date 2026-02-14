@@ -1,7 +1,9 @@
 package com.docshot.ui
 
+import android.os.Build
 import android.util.Log
 import android.util.Size
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -17,6 +19,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
@@ -26,6 +31,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -34,8 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,9 +74,29 @@ fun CameraPreview(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val view = LocalView.current
     val detectionState by viewModel.detectionState.collectAsState()
     val cameraState by viewModel.cameraState.collectAsState()
+    val autoCapEnabled by viewModel.autoCapEnabled.collectAsState()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    // Provide context to ViewModel for auto-capture
+    LaunchedEffect(context) {
+        viewModel.setContext(context)
+    }
+
+    // Collect haptic events and perform haptic feedback
+    // CONFIRM requires API 30; fall back to LONG_PRESS on older devices
+    LaunchedEffect(Unit) {
+        viewModel.hapticEvent.collect {
+            val feedbackConstant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                HapticFeedbackConstants.CONFIRM
+            } else {
+                HapticFeedbackConstants.LONG_PRESS
+            }
+            view.performHapticFeedback(feedbackConstant)
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose { analysisExecutor.shutdown() }
@@ -106,7 +134,7 @@ fun CameraPreview(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Quad overlay
+        // Quad overlay with stability visual feedback
         QuadOverlay(
             detectionState = detectionState,
             modifier = Modifier.fillMaxSize()
@@ -170,6 +198,28 @@ fun CameraPreview(
                 painter = painterResource(id = R.drawable.ic_photo_library),
                 contentDescription = "Import from gallery",
                 modifier = Modifier.size(24.dp)
+            )
+        }
+
+        // Auto-capture toggle button
+        FloatingActionButton(
+            onClick = { viewModel.toggleAutoCap() },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 24.dp, bottom = 40.dp)
+                .size(48.dp),
+            containerColor = if (autoCapEnabled) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp)
+        ) {
+            Icon(
+                imageVector = if (autoCapEnabled) Icons.Filled.AutoAwesome
+                    else Icons.Outlined.AutoAwesome,
+                contentDescription = if (autoCapEnabled) "Disable auto-capture"
+                    else "Enable auto-capture",
+                modifier = Modifier.size(24.dp),
+                tint = if (autoCapEnabled) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -250,6 +300,11 @@ private fun bindCamera(
  * Draws the detected document quadrilateral over the camera preview.
  * Maps normalized [0,1] detection coordinates to canvas space using FILL_CENTER
  * scaling to match PreviewView's coordinate system.
+ *
+ * Visual feedback based on stability:
+ * - Detection, not stable: Green quad stroke
+ * - Progress >= 0.5: gradually increasing fill opacity (0% to 15%)
+ * - Stable (progress >= 1.0): Cyan/Teal quad with thicker stroke ("ready to capture")
  */
 @Composable
 private fun QuadOverlay(
@@ -260,6 +315,20 @@ private fun QuadOverlay(
     val srcW = detectionState.sourceWidth
     val srcH = detectionState.sourceHeight
     if (srcW == 0 || srcH == 0) return
+
+    val progress = detectionState.stabilityProgress
+    val isStable = detectionState.isStable
+
+    // Color transitions based on stability
+    val quadColor = if (isStable) Color.Cyan else Color.Green
+    val strokeWidth = if (isStable) 5f else 3f // dp, applied below
+
+    // Fill opacity ramps from 0% at progress=0.5 to 15% at progress=1.0
+    val fillAlpha = if (progress > 0.5f) {
+        ((progress - 0.5f) / 0.5f * 0.15f).coerceIn(0f, 0.15f)
+    } else {
+        0f
+    }
 
     Canvas(modifier = modifier) {
         // Compute FILL_CENTER transform to match PreviewView's scaling
@@ -288,7 +357,7 @@ private fun QuadOverlay(
             return Offset(x, y)
         }
 
-        // Draw quad outline
+        // Build quad path
         val path = Path().apply {
             val p0 = mapPoint(corners[0])
             moveTo(p0.x, p0.y)
@@ -299,17 +368,28 @@ private fun QuadOverlay(
             close()
         }
 
+        // Draw fill (builds up as stability progresses)
+        if (fillAlpha > 0f) {
+            drawPath(
+                path = path,
+                color = quadColor.copy(alpha = fillAlpha),
+                style = Fill
+            )
+        }
+
+        // Draw quad outline
         drawPath(
             path = path,
-            color = Color.Green,
-            style = Stroke(width = 3.dp.toPx())
+            color = quadColor,
+            style = Stroke(width = strokeWidth.dp.toPx())
         )
 
         // Draw corner dots
+        val dotRadius = if (isStable) 8f else 6f
         for (corner in corners) {
             drawCircle(
-                color = Color.Green,
-                radius = 6.dp.toPx(),
+                color = quadColor,
+                radius = dotRadius.dp.toPx(),
                 center = mapPoint(corner)
             )
         }

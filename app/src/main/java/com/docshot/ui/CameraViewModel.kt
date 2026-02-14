@@ -15,10 +15,13 @@ import com.docshot.util.saveBitmapToGallery
 import com.docshot.util.shareImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.lang.ref.WeakReference
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -33,7 +36,9 @@ data class DetectionUiState(
     val normalizedCorners: List<FloatArray>? = null,
     val sourceWidth: Int = 0,
     val sourceHeight: Int = 0,
-    val detectionMs: Double = 0.0
+    val detectionMs: Double = 0.0,
+    val isStable: Boolean = false,
+    val stabilityProgress: Float = 0f
 )
 
 /** State machine for the capture -> result flow. */
@@ -59,16 +64,55 @@ class CameraViewModel : ViewModel() {
     private val _cameraState = MutableStateFlow<CameraUiState>(CameraUiState.Idle)
     val cameraState: StateFlow<CameraUiState> = _cameraState
 
+    /** Whether auto-capture triggers when document is stably detected. */
+    private val _autoCapEnabled = MutableStateFlow(true)
+    val autoCapEnabled: StateFlow<Boolean> = _autoCapEnabled
+
+    /** Emitted when capture triggers (auto or manual) so CameraScreen can fire haptic. */
+    private val _hapticEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val hapticEvent: SharedFlow<Unit> = _hapticEvent
+
+    /** Weak reference to activity context for auto-capture. Set via [setContext]. */
+    private var contextRef: WeakReference<Context>? = null
+
     /** Set by CameraScreen when binding the camera. */
     var imageCapture: ImageCapture? = null
+
+    /**
+     * Store a context reference for auto-capture. Must be called from CameraScreen
+     * during composition (e.g., in a LaunchedEffect or remember block).
+     * Uses a WeakReference to avoid leaking the Activity.
+     */
+    fun setContext(context: Context) {
+        contextRef = WeakReference(context)
+    }
+
+    fun toggleAutoCap() {
+        _autoCapEnabled.value = !_autoCapEnabled.value
+        Log.d(TAG, "Auto-capture toggled: ${_autoCapEnabled.value}")
+    }
 
     val frameAnalyzer = FrameAnalyzer { result ->
         _detectionState.value = DetectionUiState(
             normalizedCorners = result.normalizedCorners,
             sourceWidth = result.sourceWidth,
             sourceHeight = result.sourceHeight,
-            detectionMs = result.detectionMs
+            detectionMs = result.detectionMs,
+            isStable = result.isStable,
+            stabilityProgress = result.stabilityProgress
         )
+
+        // Auto-capture: trigger when stable, enabled, and idle
+        if (result.isStable
+            && _autoCapEnabled.value
+            && _cameraState.value is CameraUiState.Idle
+        ) {
+            val ctx = contextRef?.get()
+            if (ctx != null) {
+                Log.d(TAG, "Auto-capture triggered (stable detection)")
+                captureDocument(ctx)
+            }
+        }
     }
 
     /**
@@ -82,6 +126,7 @@ class CameraViewModel : ViewModel() {
         if (_cameraState.value !is CameraUiState.Idle) return
 
         _cameraState.value = CameraUiState.Capturing
+        _hapticEvent.tryEmit(Unit)
 
         capture.takePicture(
             ContextCompat.getMainExecutor(context),

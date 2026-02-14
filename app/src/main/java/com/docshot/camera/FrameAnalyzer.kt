@@ -78,7 +78,9 @@ class FrameAnalyzer(
                 sourceWidth = displayWidth,
                 sourceHeight = displayHeight,
                 detectionMs = detection?.detectionMs ?: 0.0,
-                totalMs = totalMs
+                totalMs = totalMs,
+                isStable = smoother.isStable,
+                stabilityProgress = smoother.stabilityProgress
             ))
         } finally {
             imageProxy.close()
@@ -166,5 +168,7 @@ data class FrameDetectionResult(
     val sourceWidth: Int,
     val sourceHeight: Int,
     val detectionMs: Double,
-    val totalMs: Double
+    val totalMs: Double,
+    val isStable: Boolean = false,
+    val stabilityProgress: Float = 0f
 )

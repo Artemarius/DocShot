@@ -6,6 +6,7 @@ import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageProxy
+import com.docshot.cv.detectAndCorrect
 import com.docshot.cv.detectDocument
 import com.docshot.cv.rectify
 import com.docshot.cv.refineCorners
@@ -122,6 +123,15 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
         // Rectify with high-quality interpolation
         stage = "rectification"
         rectifiedMat = rectify(rotatedMat, refinedCorners, Imgproc.INTER_CUBIC)
+
+        // Detect and correct document orientation (upside-down, sideways)
+        stage = "orientation correction"
+        val (orientedMat, orientation) = detectAndCorrect(rectifiedMat)
+        if (orientedMat !== rectifiedMat) {
+            rectifiedMat.release()
+            rectifiedMat = orientedMat
+        }
+        Log.d(TAG, "Orientation: %s".format(orientation.name))
 
         // Convert to bitmaps
         stage = "bitmap conversion"
