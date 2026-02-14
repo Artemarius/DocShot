@@ -1,0 +1,38 @@
+# Android / Gradle
+*.iml
+.gradle/
+/local.properties
+/.idea/
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Kotlin
+*.class
+
+# Android SDK
+/sdk/
+
+# NDK
+obj/
+
+# OpenCV
+/OpenCV-android-sdk/
+
+# Private planning docs
+PROJECT.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
