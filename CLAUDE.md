@@ -98,3 +98,4 @@ app/src/main/java/com/docshot/
 - Test device: Samsung Galaxy S21 via USB debugging
 - Phase 1 complete: project skeleton builds, CameraX preview + OpenCV init working
 - Phase 2 complete: full classical CV pipeline (detect + rectify) working on static images, 10 unit tests passing
+- Phase 3 in progress: real-time camera detection with quad overlay implemented, needs on-device testing
