@@ -1,11 +1,15 @@
 package com.docshot.camera
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageProxy
 import com.docshot.cv.detectDocument
 import com.docshot.cv.rectify
 import com.docshot.cv.refineCorners
+import com.docshot.util.bitmapToMat
 import com.docshot.util.matToBitmap
 import org.opencv.core.Core
 import org.opencv.core.CvType
@@ -13,6 +17,7 @@ import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
 
 private const val TAG = "DocShot:Capture"
+private const val MAX_DETECTION_WIDTH = 1000
 
 /**
  * Result of a full-resolution capture pipeline.
@@ -26,7 +31,10 @@ data class CaptureResult(
 
 /**
  * Processes a full-resolution [ImageProxy] through the complete document pipeline:
- * YUV→BGR → rotate → detect → refine corners → rectify → bitmaps.
+ * decode (JPEG or YUV) → rotate → detect → refine corners → rectify → bitmaps.
+ *
+ * Handles both JPEG format (common on ImageCapture with MAXIMIZE_QUALITY)
+ * and YUV_420_888 format.
  *
  * All intermediate Mats are released in a finally block.
  * The caller must close the [ImageProxy] after this returns.
@@ -40,37 +48,83 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
     var grayMat: Mat? = null
     var rectifiedMat: Mat? = null
 
+    var stage = "image decode"
     try {
-        bgrMat = yuvImageProxyToBgrMat(imageProxy)
-        Log.d(TAG, "YUV→BGR: %dx%d".format(bgrMat.cols(), bgrMat.rows()))
-
-        // Apply rotation to match display orientation
         val rotation = imageProxy.imageInfo.rotationDegrees
-        rotatedMat = rotateMat(bgrMat, rotation)
-        bgrMat.release()
-        bgrMat = null
 
-        Log.d(TAG, "Rotated %d°: %dx%d".format(rotation, rotatedMat.cols(), rotatedMat.rows()))
+        bgrMat = when (imageProxy.format) {
+            ImageFormat.JPEG -> {
+                Log.d(TAG, "Capture format: JPEG, rotation=%d°".format(rotation))
+                jpegImageProxyToBgrMat(imageProxy, rotation).also {
+                    // Rotation handled during JPEG decode, so skip rotateMat
+                }
+            }
+            ImageFormat.YUV_420_888 -> {
+                Log.d(TAG, "Capture format: YUV_420_888, rotation=%d°".format(rotation))
+                yuvImageProxyToBgrMat(imageProxy)
+            }
+            else -> error("Unsupported ImageProxy format: ${imageProxy.format}")
+        }
+        Log.d(TAG, "Decoded: %dx%d".format(bgrMat.cols(), bgrMat.rows()))
 
-        // Detect document
-        val detection = detectDocument(rotatedMat)
+        // Apply rotation — for JPEG this was already done during decode, skip it
+        stage = "rotation"
+        if (imageProxy.format == ImageFormat.JPEG) {
+            rotatedMat = bgrMat
+            bgrMat = null // Prevent double-release
+        } else {
+            rotatedMat = rotateMat(bgrMat, rotation)
+            bgrMat.release()
+            bgrMat = null
+        }
+        Log.d(TAG, "Rotated: %dx%d".format(rotatedMat.cols(), rotatedMat.rows()))
+
+        // Detect document — downscale for detection since kernels are tuned for ~640px
+        stage = "detection"
+        val detectionMat: Mat
+        val scaleFactor: Double
+        if (rotatedMat.cols() > MAX_DETECTION_WIDTH) {
+            val scale = MAX_DETECTION_WIDTH.toDouble() / rotatedMat.cols()
+            val newH = (rotatedMat.rows() * scale).toInt()
+            detectionMat = Mat()
+            Imgproc.resize(rotatedMat, detectionMat,
+                org.opencv.core.Size(MAX_DETECTION_WIDTH.toDouble(), newH.toDouble()))
+            scaleFactor = 1.0 / scale
+        } else {
+            detectionMat = rotatedMat
+            scaleFactor = 1.0
+        }
+        val detection = detectDocument(detectionMat)
+        if (detectionMat !== rotatedMat) detectionMat.release()
+
         if (detection == null) {
             Log.d(TAG, "processCapture: no document found")
             rotatedMat.release()
+            rotatedMat = null
             return null
         }
 
+        // Scale corners back to full image coordinates
+        val fullResCorners = detection.corners.map { pt ->
+            org.opencv.core.Point(pt.x * scaleFactor, pt.y * scaleFactor)
+        }
+
         // Sub-pixel corner refinement on grayscale
+        stage = "corner refinement"
         grayMat = Mat()
-        Imgproc.cvtColor(rotatedMat, grayMat, Imgproc.COLOR_BGR2GRAY)
-        val refinedCorners = refineCorners(grayMat, detection.corners)
+        val colorConversion = if (rotatedMat.channels() == 4)
+            Imgproc.COLOR_RGBA2GRAY else Imgproc.COLOR_BGR2GRAY
+        Imgproc.cvtColor(rotatedMat, grayMat, colorConversion)
+        val refinedCorners = refineCorners(grayMat, fullResCorners)
         grayMat.release()
         grayMat = null
 
         // Rectify with high-quality interpolation
+        stage = "rectification"
         rectifiedMat = rectify(rotatedMat, refinedCorners, Imgproc.INTER_CUBIC)
 
         // Convert to bitmaps
+        stage = "bitmap conversion"
         val originalBitmap = matToBitmap(rotatedMat)
         val rectifiedBitmap = matToBitmap(rectifiedMat)
 
@@ -82,12 +136,41 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
             rectifiedBitmap = rectifiedBitmap,
             pipelineMs = ms
         )
+    } catch (e: Exception) {
+        throw RuntimeException("Capture failed at $stage: ${e.message}", e)
     } finally {
         bgrMat?.release()
         rotatedMat?.release()
         grayMat?.release()
         rectifiedMat?.release()
     }
+}
+
+/**
+ * Decodes a JPEG [ImageProxy] to a BGR Mat with rotation already applied.
+ * ImageCapture with CAPTURE_MODE_MAXIMIZE_QUALITY often returns JPEG on modern devices.
+ */
+private fun jpegImageProxyToBgrMat(imageProxy: ImageProxy, rotationDegrees: Int): Mat {
+    val buffer = imageProxy.planes[0].buffer
+    val bytes = ByteArray(buffer.remaining())
+    buffer.get(bytes)
+
+    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        ?: error("Failed to decode JPEG from ImageCapture")
+
+    // Apply rotation if needed
+    val rotated = if (rotationDegrees != 0) {
+        val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+        val r = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (r !== bitmap) bitmap.recycle()
+        r
+    } else {
+        bitmap
+    }
+
+    val mat = bitmapToMat(rotated)
+    rotated.recycle()
+    return mat
 }
 
 /**
@@ -136,7 +219,6 @@ private fun yuvImageProxyToBgrMat(imageProxy: ImageProxy): Mat {
 
     if (uvPixelStride == 2) {
         // Most devices: U/V planes are interleaved (NV21-like)
-        // V plane already has interleaved VU data in many implementations
         for (row in 0 until uvHeight) {
             for (col in 0 until uvWidth) {
                 val vIdx = row * uvRowStride + col * uvPixelStride

@@ -60,14 +60,14 @@ private fun MainContent() {
                 FilterChip(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    label = { Text("Pipeline Test") },
+                    label = { Text("Import") },
                     modifier = Modifier.padding(start = 8.dp)
                 )
             }
 
             when (selectedTab) {
-                0 -> CameraPermissionScreen()
-                1 -> PipelineTestScreen()
+                0 -> CameraPermissionScreen(onOpenGallery = { selectedTab = 1 })
+                1 -> GalleryScreen()
             }
         }
     }

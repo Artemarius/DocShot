@@ -50,17 +50,20 @@ import java.util.concurrent.Executors
 private const val TAG = "DocShot:CameraScreen"
 
 @Composable
-fun CameraPermissionScreen() {
+fun CameraPermissionScreen(onOpenGallery: () -> Unit = {}) {
     val permissionState = rememberCameraPermissionState()
 
     when {
-        permissionState.hasPermission -> CameraPreview()
+        permissionState.hasPermission -> CameraPreview(onOpenGallery = onOpenGallery)
         permissionState.permissionRequested -> CameraDeniedMessage()
     }
 }
 
 @Composable
-fun CameraPreview(viewModel: CameraViewModel = viewModel()) {
+fun CameraPreview(
+    viewModel: CameraViewModel = viewModel(),
+    onOpenGallery: () -> Unit = {}
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val detectionState by viewModel.detectionState.collectAsState()
@@ -151,6 +154,23 @@ fun CameraPreview(viewModel: CameraViewModel = viewModel()) {
                     modifier = Modifier.size(32.dp)
                 )
             }
+        }
+
+        // Gallery button
+        FloatingActionButton(
+            onClick = onOpenGallery,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 24.dp, bottom = 40.dp)
+                .size(48.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 4.dp)
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_photo_library),
+                contentDescription = "Import from gallery",
+                modifier = Modifier.size(24.dp)
+            )
         }
 
         // Error snackbar

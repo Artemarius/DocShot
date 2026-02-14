@@ -27,3 +27,10 @@ fun matToBitmap(mat: Mat): Bitmap {
     Utils.matToBitmap(mat, bitmap)
     return bitmap
 }
+
+/** Converts an Android Bitmap to an OpenCV Mat (RGBA). Caller must release the returned Mat. */
+fun bitmapToMat(bitmap: Bitmap): Mat {
+    val mat = Mat()
+    Utils.bitmapToMat(bitmap, mat)
+    return mat
+}
