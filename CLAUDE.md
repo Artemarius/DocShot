@@ -66,8 +66,34 @@ app/src/main/java/com/docshot/
 - Memory: < 150MB including camera buffers
 - Profile with `System.nanoTime()` around key operations, log in debug
 
-## Key Dependencies (versions pinned in build.gradle.kts)
-- OpenCV Android SDK: 4.10.0
-- CameraX: 1.3.x
-- Compose BOM: 2024.x
+## Key Dependencies (versions pinned in gradle/libs.versions.toml)
+- AGP: 8.7.3
+- Kotlin: 2.0.21
+- OpenCV Android SDK: 4.12.0
+- CameraX: 1.4.1
+- Compose BOM: 2024.12.01
 - TFLite (Phase 2): 2.16.x
+
+## Local Development Environment (Windows)
+- **OS:** Windows 10 Pro (10.0.19045)
+- **IDE:** Android Studio (installed at `D:\Program Files\Android\Android Studio`)
+- **JDK:** JetBrains Runtime 21 (bundled with Android Studio at `D:\Program Files\Android\Android Studio\jbr`)
+- **Android SDK:** `D:\Android\Sdk` (SDK 34, NDK, CMake installed)
+- **OpenCV Android SDK:** `D:\OpenCV-android-sdk` (v4.12.0)
+- **Gradle cache:** `D:\Android\.gradle`
+- **Project repo:** `E:\Repos\DocShot`
+
+### Environment Variables (user-level)
+| Variable | Value |
+|----------|-------|
+| `ANDROID_HOME` | `D:\Android\Sdk` |
+| `JAVA_HOME` | `D:\Program Files\Android\Android Studio\jbr` |
+| `GRADLE_USER_HOME` | `D:\Android\.gradle` |
+| `OPENCV_ANDROID_SDK` | `D:\OpenCV-android-sdk` |
+| `PATH` (appended) | `D:\Android\Sdk\platform-tools` |
+
+### Notes
+- C: drive has limited space — all SDK/build artifacts go on D:
+- No standalone JDK installed; using Android Studio's bundled JBR 21
+- Test device: Samsung Galaxy S21 via USB debugging
+- Phase 1 complete: project skeleton builds, CameraX preview + OpenCV init working

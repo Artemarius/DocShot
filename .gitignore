@@ -15,6 +15,7 @@
 
 # Kotlin
 *.class
+.kotlin/
 
 # Android SDK
 /sdk/
