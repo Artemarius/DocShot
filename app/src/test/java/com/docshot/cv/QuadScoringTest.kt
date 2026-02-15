@@ -289,6 +289,45 @@ class QuadScoringTest {
     }
 
     @Test
+    fun `aspectRatioScore high for US Letter ratio`() {
+        // US Letter is 8.5x11 = 1:1.294, so a 100x129.4 rectangle
+        val letter = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 129.4),
+            Point(0.0, 129.4)
+        )
+        val score = aspectRatioScore(letter)
+        assertTrue("US Letter aspect ratio score should be > 0.8, got $score", score > 0.8)
+    }
+
+    @Test
+    fun `aspectRatioScore high for ID card ratio`() {
+        // CR-80 ID card is 85.6x53.98mm = 1:1.586 (long/short), so a 100x158.6 rectangle
+        val idCard = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 158.6),
+            Point(0.0, 158.6)
+        )
+        val score = aspectRatioScore(idCard)
+        assertTrue("ID card aspect ratio score should be > 0.8, got $score", score > 0.8)
+    }
+
+    @Test
+    fun `aspectRatioScore high for square ratio`() {
+        // Square 1:1 — common for some sticky notes, coasters, etc.
+        val square = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 100.0),
+            Point(0.0, 100.0)
+        )
+        val score = aspectRatioScore(square)
+        assertTrue("Square aspect ratio score should be > 0.9, got $score", score > 0.9)
+    }
+
+    @Test
     fun `scoreQuad includes aspect ratio component`() {
         // Compare a document-shaped quad vs a very thin strip
         // Both same area and same angles, but different aspect ratios

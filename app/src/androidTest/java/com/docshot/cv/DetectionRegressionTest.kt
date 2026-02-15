@@ -193,6 +193,145 @@ class DetectionRegressionTest {
     }
 
     // ----------------------------------------------------------------
+    // Group D: Document types, challenging conditions, expanded coverage
+    // ----------------------------------------------------------------
+
+    @Test
+    fun usLetterFormat_detects() {
+        val image = SyntheticImageFactory.whiteDocOnSolidBg(
+            corners = SyntheticImageFactory.defaultLetterCorners()
+        )
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect US Letter-sized document", result)
+            Log.d(TAG, "US Letter confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun idCardFormat_detects() {
+        val image = SyntheticImageFactory.smallDoc(
+            corners = SyntheticImageFactory.defaultIdCardCorners()
+        )
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect ID card-sized document", result)
+            Log.d(TAG, "ID card confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun extremeLowLight_detectsOrGracefullyFails() {
+        // Extremely dim scene — pipeline must not crash even if detection fails
+        val image = SyntheticImageFactory.lowLightDoc(brightness = 0.10)
+        try {
+            val result = detectDocument(image)
+            // No assertion on detection — just verifying no crash
+            Log.d(TAG, "Extreme low light: detected=${result != null}, " +
+                "confidence=${result?.confidence ?: "N/A"}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun overexposed_detects() {
+        val image = SyntheticImageFactory.overexposedDoc(exposure = 1.8)
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect document in overexposed scene", result)
+            Log.d(TAG, "Overexposed confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun verticalShadow_detects() {
+        val image = SyntheticImageFactory.verticalShadowDoc(shadowIntensity = 0.6)
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect document with vertical shadow", result)
+            Log.d(TAG, "Vertical shadow confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun redBackground_detects() {
+        val image = SyntheticImageFactory.coloredBgDoc(
+            bgColor = Scalar(50.0, 50.0, 200.0)  // red in BGR
+        )
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect document on red background", result)
+            Log.d(TAG, "Red bg confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun greenBackground_detects() {
+        val image = SyntheticImageFactory.coloredBgDoc(
+            bgColor = Scalar(50.0, 180.0, 50.0)  // green in BGR
+        )
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect document on green background", result)
+            Log.d(TAG, "Green bg confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun gridPatternBg_detects() {
+        val image = SyntheticImageFactory.patternedBgDoc(patternType = "grid")
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect document on grid-patterned background", result)
+            Log.d(TAG, "Grid pattern bg confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun lowLightWithNoise_detects() {
+        val dim = SyntheticImageFactory.lowLightDoc(brightness = 0.30)
+        val noisy = SyntheticImageFactory.addNoise(dim, stddev = 15.0)
+        dim.release()
+        try {
+            val result = detectDocument(noisy)
+            assertNotNull("Should detect document in low light with noise", result)
+            Log.d(TAG, "Low light + noise confidence: ${result!!.confidence}")
+        } finally {
+            noisy.release()
+        }
+    }
+
+    @Test
+    fun smallReceiptOnColoredBg_detects() {
+        val image = SyntheticImageFactory.smallDoc(
+            corners = SyntheticImageFactory.defaultReceiptCorners(),
+            bgColor = Scalar(100.0, 130.0, 170.0)  // warm wood-tone in BGR
+        )
+        try {
+            val result = detectDocument(image)
+            assertNotNull("Should detect small receipt on colored background", result)
+            Log.d(TAG, "Small receipt on colored bg confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    // ----------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------
 

@@ -49,6 +49,22 @@ object SyntheticImageFactory {
         Point(280.0, 400.0)   // BL
     )
 
+    /** US Letter-proportioned document (~15% area, 1:1.294 ratio). */
+    fun defaultLetterCorners(): List<Point> = listOf(
+        Point(200.0, 60.0),   // TL
+        Point(600.0, 60.0),   // TR
+        Point(600.0, 578.0),  // BR  (400w x 518h ≈ 1:1.295)
+        Point(200.0, 578.0)   // BL
+    )
+
+    /** CR-80 ID card-sized document (~4% area, 1:1.586 ratio). */
+    fun defaultIdCardCorners(): List<Point> = listOf(
+        Point(310.0, 210.0),  // TL
+        Point(490.0, 210.0),  // TR
+        Point(490.0, 495.0),  // BR  (180w x 285h ≈ 1:1.583)
+        Point(310.0, 495.0)   // BL
+    )
+
     // ----------------------------------------------------------------
     // Image generators
     // ----------------------------------------------------------------
@@ -264,6 +280,61 @@ object SyntheticImageFactory {
         sumMat.convertTo(result, CvType.CV_8UC3)
         sumMat.release()
         return result
+    }
+
+    /**
+     * Vertical shadow across the document (top-to-bottom gradient).
+     * Complements the horizontal shadow in [shadowedDoc].
+     * @param shadowIntensity 0.0 = no shadow, 1.0 = fully black shadow at top.
+     */
+    fun verticalShadowDoc(
+        shadowIntensity: Double = 0.6,
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val image = whiteDocOnSolidBg(corners = corners, width = width, height = height)
+
+        // Create a vertical gradient shadow from top (dark) to bottom (light)
+        val shadow = Mat(height, width, CvType.CV_32FC3)
+        for (row in 0 until height) {
+            val factor = 1.0 - shadowIntensity * (1.0 - row.toDouble() / height)
+            for (col in 0 until width) {
+                shadow.put(row, col, factor, factor, factor)
+            }
+        }
+
+        val imageFloat = Mat()
+        image.convertTo(imageFloat, CvType.CV_32FC3)
+        Core.multiply(imageFloat, shadow, imageFloat)
+        imageFloat.convertTo(image, CvType.CV_8UC3)
+        imageFloat.release()
+        shadow.release()
+        return image
+    }
+
+    /**
+     * Overexposed / washed-out scene: lighter background with document
+     * values pushed toward saturation via an exposure multiplier.
+     * @param exposure Multiplier applied to all pixel values (1.5-2.0 typical).
+     */
+    fun overexposedDoc(
+        exposure: Double = 1.8,
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        // Darker background so contrast survives the exposure boost
+        // (100 * 1.8 = 180 bg vs 240 * 1.8 = 255 doc → still detectable)
+        val image = whiteDocOnSolidBg(
+            bgColor = Scalar(100.0, 100.0, 100.0),
+            corners = corners,
+            width = width,
+            height = height
+        )
+        // Apply exposure multiplier — convertTo with alpha param clips to 0-255
+        image.convertTo(image, CvType.CV_8UC3, exposure)
+        return image
     }
 
     // ----------------------------------------------------------------
