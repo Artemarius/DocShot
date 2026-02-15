@@ -4,9 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.camera.core.Camera
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -44,6 +46,9 @@ private const val RESULT_CONFIDENCE_THRESHOLD = 0.65
 // Suppress auto-capture for this many ms after entering Idle state.
 // Gives the user time to frame the document and lets detection settle.
 private const val AUTO_CAPTURE_WARMUP_MS = 1500L
+// Trigger AF lock at this fraction of stability (50% = 10/20 stable frames).
+// Gives AF ~333ms (10 frames at 30fps) to settle before auto-capture fires at frame 20.
+private const val AF_LOCK_STABILITY_THRESHOLD = 0.5f
 
 /**
  * UI state for the detected document overlay.
@@ -119,6 +124,18 @@ class CameraViewModel : ViewModel() {
      */
     private var idleEnteredAt: Long = android.os.SystemClock.elapsedRealtime()
 
+    /** Whether AF has confirmed focus lock (ready for sharp capture). */
+    private var _isAfLocked = false
+
+    /** Whether an AF trigger request is in flight. */
+    private var _isAfTriggering = false
+
+    /** Read-only accessor for debug overlay. */
+    val isAfLocked: Boolean get() = _isAfLocked
+
+    /** Read-only accessor for debug overlay. */
+    val isAfTriggering: Boolean get() = _isAfTriggering
+
     /**
      * Store a context reference for auto-capture. Must be called from CameraScreen
      * during composition (e.g., in a LaunchedEffect or remember block).
@@ -166,13 +183,28 @@ class CameraViewModel : ViewModel() {
             isPartialDocument = result.isPartialDocument
         )
 
-        // Auto-capture: trigger when stable, high confidence, enabled, idle, and past warmup
+        // AF lock: trigger at 50% stability so AF has time to settle before auto-capture fires
+        if (result.stabilityProgress >= AF_LOCK_STABILITY_THRESHOLD
+            && !_isAfLocked
+            && !_isAfTriggering
+            && _autoCapEnabled.value
+        ) {
+            triggerAfLock()
+        }
+
+        // Cancel AF lock when quad is lost (no detection) so continuous AF resumes
+        if (result.normalizedCorners == null && (_isAfLocked || _isAfTriggering)) {
+            cancelAfLock()
+        }
+
+        // Auto-capture: trigger when stable, high confidence, enabled, idle, past warmup, and AF locked
         val warmupElapsed = android.os.SystemClock.elapsedRealtime() - idleEnteredAt
         if (result.isStable
             && result.confidence >= AUTO_CAPTURE_CONFIDENCE_THRESHOLD
             && _autoCapEnabled.value
             && _cameraState.value is CameraUiState.Idle
             && warmupElapsed >= AUTO_CAPTURE_WARMUP_MS
+            && _isAfLocked
         ) {
             val ctx = contextRef?.get()
             if (ctx != null) {
@@ -444,10 +476,52 @@ class CameraViewModel : ViewModel() {
     }
 
     /**
+     * Triggers a one-shot AF lock at the center of the frame.
+     * Uses FLAG_AF only with auto-cancel disabled so focus stays locked
+     * until we explicitly cancel via [cancelAfLock].
+     */
+    private fun triggerAfLock() {
+        val cam = camera ?: return
+        val ctx = contextRef?.get() ?: return
+        _isAfTriggering = true
+        val factory = SurfaceOrientedMeteringPointFactory(1f, 1f)
+        val centerPoint = factory.createPoint(0.5f, 0.5f)
+        val action = FocusMeteringAction.Builder(centerPoint, FocusMeteringAction.FLAG_AF)
+            .disableAutoCancel()
+            .build()
+        val future = cam.cameraControl.startFocusAndMetering(action)
+        future.addListener({
+            try {
+                val result = future.get()
+                if (result.isFocusSuccessful) {
+                    _isAfLocked = true
+                    Log.d(TAG, "AF lock successful")
+                } else {
+                    Log.d(TAG, "AF lock failed — focus not achieved")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "AF lock error: ${e.message}")
+            } finally {
+                _isAfTriggering = false
+            }
+        }, ContextCompat.getMainExecutor(ctx))
+    }
+
+    /**
+     * Cancels any active AF lock and returns the camera to continuous autofocus.
+     */
+    private fun cancelAfLock() {
+        camera?.cameraControl?.cancelFocusAndMetering()
+        _isAfLocked = false
+        _isAfTriggering = false
+    }
+
+    /**
      * Centralized transition to Idle: resets warmup timer and clears the smoother
      * so stability must build from scratch (prevents instant re-fire of auto-capture).
      */
     private fun enterIdle() {
+        cancelAfLock()
         idleEnteredAt = android.os.SystemClock.elapsedRealtime()
         frameAnalyzer.resetSmoothing()
         _cameraState.value = CameraUiState.Idle

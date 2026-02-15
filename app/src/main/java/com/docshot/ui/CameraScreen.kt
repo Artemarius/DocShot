@@ -236,15 +236,20 @@ fun CameraPreview(
             val warmupRemaining = viewModel.warmupRemainingMs()
             val stableFrames = (detectionState.stabilityProgress * 20).toInt() // stableThreshold=20
             val conf = detectionState.confidence
+            val afLocked = viewModel.isAfLocked
+            val afTriggering = viewModel.isAfTriggering
             val autoReady = detectionState.isStable
                     && conf >= 0.65
                     && autoCapEnabled
                     && warmupRemaining <= 0
+                    && afLocked
             Text(
                 text = buildString {
                     append("%.0f ms | ".format(detectionState.detectionMs))
                     append("stable: $stableFrames/20 | ")
                     append("conf: %.2f".format(conf))
+                    if (afTriggering) append(" | AF")
+                    else if (afLocked) append(" | AF OK")
                     if (warmupRemaining > 0) append(" | warmup: ${warmupRemaining}ms")
                     if (autoReady) append(" | READY")
                 },
