@@ -35,6 +35,9 @@ keystore.properties
 PROJECT.md
 STORE_LISTING.md
 
+# Dev screenshots (root-level test captures)
+screenshot_*.png
+
 # OS
 .DS_Store
 Thumbs.db
