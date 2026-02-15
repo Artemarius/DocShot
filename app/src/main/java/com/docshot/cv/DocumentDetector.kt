@@ -53,6 +53,10 @@ data class DetectionStatus(
     val isPartialDocument: Boolean
 )
 
+// Module-level MatPool shared across strategy attempts within a single detection call.
+// Not thread-safe — detection runs single-threaded on Dispatchers.Default.
+private val matPool = MatPool(maxSize = 8)
+
 /**
  * Runs detection only: finds the best document quadrilateral without rectifying.
  * Uses multi-strategy preprocessing — tries alternative strategies if the primary
@@ -85,31 +89,38 @@ fun detectDocumentWithStatus(input: Mat): DetectionStatus {
 
     val sceneAnalysis = analyzeScene(input)
     val strategies = sceneAnalysis.strategies
+    val sharedGray = sceneAnalysis.grayMat
 
     var bestResult: DocumentCorners? = null
     var anyPartialDocument = false
 
-    for (strategy in strategies) {
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        if (elapsed > STRATEGY_TIME_BUDGET_MS && bestResult != null) {
-            Log.d(TAG, "Strategy time budget exceeded (%.1f ms), stopping".format(elapsed))
-            break
-        }
-
-        val strategyResult = detectWithStrategy(input, strategy)
-        anyPartialDocument = anyPartialDocument || strategyResult.isPartialDocument
-
-        val candidate = strategyResult.result
-        if (candidate != null) {
-            if (bestResult == null || candidate.confidence > bestResult.confidence) {
-                bestResult = candidate
-            }
-            if (bestResult.confidence >= STRATEGY_SHORT_CIRCUIT_CONFIDENCE) {
-                Log.d(TAG, "Short-circuit: confidence %.2f >= %.2f with $strategy".format(
-                    bestResult.confidence, STRATEGY_SHORT_CIRCUIT_CONFIDENCE))
+    try {
+        for (strategy in strategies) {
+            val elapsed = (System.nanoTime() - start) / 1_000_000.0
+            if (elapsed > STRATEGY_TIME_BUDGET_MS && bestResult != null) {
+                Log.d(TAG, "Strategy time budget exceeded (%.1f ms), stopping".format(elapsed))
                 break
             }
+
+            // Share the gray Mat from analyzeScene with the first strategy that uses it
+            val strategyResult = detectWithStrategy(input, strategy, sharedGray)
+            anyPartialDocument = anyPartialDocument || strategyResult.isPartialDocument
+
+            val candidate = strategyResult.result
+            if (candidate != null) {
+                if (bestResult == null || candidate.confidence > bestResult.confidence) {
+                    bestResult = candidate
+                }
+                if (bestResult.confidence >= STRATEGY_SHORT_CIRCUIT_CONFIDENCE) {
+                    Log.d(TAG, "Short-circuit: confidence %.2f >= %.2f with $strategy".format(
+                        bestResult.confidence, STRATEGY_SHORT_CIRCUIT_CONFIDENCE))
+                    break
+                }
+            }
         }
+    } finally {
+        // Release the shared gray Mat from analyzeScene
+        sharedGray?.release()
     }
 
     // Apply minimum confidence threshold
@@ -137,81 +148,100 @@ fun detectDocumentWithStatus(input: Mat): DetectionStatus {
  * Runs detection with a single preprocessing strategy.
  * Extracted from the original `detectDocument()` body — identical logic,
  * parameterized by [strategy].
+ *
+ * Wrapped in try/finally to guarantee intermediate Mat cleanup even if
+ * scoring or contour analysis throws.
  */
-private fun detectWithStrategy(input: Mat, strategy: PreprocessStrategy): DetectionStatus {
+private fun detectWithStrategy(
+    input: Mat,
+    strategy: PreprocessStrategy,
+    sharedGray: Mat? = null
+): DetectionStatus {
     val start = System.nanoTime()
     val imageSize = Size(input.cols().toDouble(), input.rows().toDouble())
     val imageArea = imageSize.width * imageSize.height
 
-    val preprocessed = preprocessWithStrategy(input, strategy)
-    val edges = when (strategy) {
-        PreprocessStrategy.HEAVY_MORPH -> detectEdgesHeavyMorph(preprocessed)
-        PreprocessStrategy.CLAHE_ENHANCED -> {
-            // CLAHE-enhanced images need lower Canny thresholds: the auto-threshold
-            // formula (0.67*median) overestimates for low-contrast scenes where edge
-            // gradients are subtle even after histogram equalization.
-            detectEdges(preprocessed, thresholdLow = 30.0, thresholdHigh = 60.0)
+    var preprocessed: Mat? = null
+    var edges: Mat? = null
+
+    try {
+        preprocessed = preprocessWithStrategy(input, strategy, sharedGray = sharedGray)
+        edges = when (strategy) {
+            PreprocessStrategy.HEAVY_MORPH -> detectEdgesHeavyMorph(preprocessed)
+            PreprocessStrategy.CLAHE_ENHANCED -> {
+                // CLAHE-enhanced images need lower Canny thresholds: the auto-threshold
+                // formula (0.67*median) overestimates for low-contrast scenes where edge
+                // gradients are subtle even after histogram equalization.
+                detectEdges(preprocessed, thresholdLow = 30.0, thresholdHigh = 60.0)
+            }
+            else -> detectEdges(preprocessed)
         }
-        else -> detectEdges(preprocessed)
-    }
-    preprocessed.release()
+        preprocessed.release()
+        preprocessed = null
 
-    val contourAnalysis = analyzeContours(edges, imageSize)
-    val quads = contourAnalysis.quads
+        val contourAnalysis = analyzeContours(edges, imageSize)
+        val quads = contourAnalysis.quads
 
-    if (quads.isEmpty()) {
+        if (quads.isEmpty()) {
+            edges.release()
+            edges = null
+            val ms = (System.nanoTime() - start) / 1_000_000.0
+            Log.d(TAG, "detectWithStrategy($strategy): %.1f ms — no quads".format(ms))
+            return DetectionStatus(
+                result = null,
+                isPartialDocument = contourAnalysis.hasPartialDocument
+            )
+        }
+
+        val rankResult = rankQuads(quads, imageArea)
+        if (rankResult.quad == null) {
+            edges.release()
+            edges = null
+            val ms = (System.nanoTime() - start) / 1_000_000.0
+            Log.d(TAG, "detectWithStrategy($strategy): %.1f ms — no valid quad after scoring".format(ms))
+            return DetectionStatus(
+                result = null,
+                isPartialDocument = contourAnalysis.hasPartialDocument
+            )
+        }
+        val corners = rankResult.quad
+
+        // Measure how well the detected quad aligns with actual Canny edge pixels.
+        val edgeDensity = QuadValidator.edgeDensityScore(edges, corners)
         edges.release()
+        edges = null
+
+        // Confidence = weighted combination of three complementary signals:
+        //   1. Quad score (60%) — geometric quality: area coverage + angle regularity.
+        //   2. Area ratio (20%) — quad area relative to image area.
+        //   3. Edge density (20%) — fraction of the quad perimeter supported by edge pixels.
+        val quadScore = scoreQuad(corners, imageArea)
+        val areaRatio = (quadArea(corners) / imageArea).coerceIn(0.0, 1.0)
+
+        // Score margin penalty for ambiguous multi-candidate scenes
+        val marginFactor = if (rankResult.candidateCount >= 2) {
+            0.5 + 0.5 * rankResult.scoreMargin
+        } else {
+            1.0
+        }
+        val confidence = (0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity) * marginFactor
+
         val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms — no quads".format(ms))
+        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms, confidence=%.2f (quad=%.2f, area=%.2f, edge=%.2f, margin=%.2f)".format(
+            ms, confidence, quadScore, areaRatio, edgeDensity, marginFactor))
+
         return DetectionStatus(
-            result = null,
+            result = DocumentCorners(
+                corners = corners,
+                detectionMs = ms,
+                confidence = confidence
+            ),
             isPartialDocument = contourAnalysis.hasPartialDocument
         )
+    } finally {
+        preprocessed?.release()
+        edges?.release()
     }
-
-    val rankResult = rankQuads(quads, imageArea)
-    if (rankResult.quad == null) {
-        edges.release()
-        val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms — no valid quad after scoring".format(ms))
-        return DetectionStatus(
-            result = null,
-            isPartialDocument = contourAnalysis.hasPartialDocument
-        )
-    }
-    val corners = rankResult.quad
-
-    // Measure how well the detected quad aligns with actual Canny edge pixels.
-    val edgeDensity = QuadValidator.edgeDensityScore(edges, corners)
-    edges.release()
-
-    // Confidence = weighted combination of three complementary signals:
-    //   1. Quad score (60%) — geometric quality: area coverage + angle regularity.
-    //   2. Area ratio (20%) — quad area relative to image area.
-    //   3. Edge density (20%) — fraction of the quad perimeter supported by edge pixels.
-    val quadScore = scoreQuad(corners, imageArea)
-    val areaRatio = (quadArea(corners) / imageArea).coerceIn(0.0, 1.0)
-
-    // Score margin penalty for ambiguous multi-candidate scenes
-    val marginFactor = if (rankResult.candidateCount >= 2) {
-        0.5 + 0.5 * rankResult.scoreMargin
-    } else {
-        1.0
-    }
-    val confidence = (0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity) * marginFactor
-
-    val ms = (System.nanoTime() - start) / 1_000_000.0
-    Log.d(TAG, "detectWithStrategy($strategy): %.1f ms, confidence=%.2f (quad=%.2f, area=%.2f, edge=%.2f, margin=%.2f)".format(
-        ms, confidence, quadScore, areaRatio, edgeDensity, marginFactor))
-
-    return DetectionStatus(
-        result = DocumentCorners(
-            corners = corners,
-            detectionMs = ms,
-            confidence = confidence
-        ),
-        isPartialDocument = contourAnalysis.hasPartialDocument
-    )
 }
 
 /**

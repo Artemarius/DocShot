@@ -13,12 +13,22 @@ import org.opencv.imgproc.Imgproc
 private const val TAG = "DocShot:Analyzer"
 private const val MAX_ANALYSIS_WIDTH = 640
 
+/** Consecutive misses before skipping every other frame. */
+private const val SKIP_TIER1_THRESHOLD = 5
+
+/** Consecutive misses before skipping 2 of every 3 frames. */
+private const val SKIP_TIER2_THRESHOLD = 15
+
 /**
  * CameraX ImageAnalysis.Analyzer that runs document detection on each camera frame.
  *
  * Extracts the Y (luminance) plane from YUV_420_888 frames, downscales if needed,
  * runs the detection pipeline, applies temporal smoothing, and reports results
  * via the [onResult] callback.
+ *
+ * Implements adaptive frame skipping: when detection repeatedly fails on complex
+ * scenes, processing rate is reduced to save CPU. When a detection is found,
+ * immediately resumes full-rate processing.
  *
  * Results are reported as normalized [0,1] coordinates with rotation already
  * applied for display orientation.
@@ -29,7 +39,27 @@ class FrameAnalyzer(
 
     private val smoother = QuadSmoother()
 
+    /** Number of consecutive frames with no valid detection (confidence < threshold). */
+    private var consecutiveMisses = 0
+
+    /** Frame counter for skip logic (resets when detection found). */
+    private var frameCounter = 0
+
+    /** Last reported result, used when skipping frames. */
+    private var lastResult: FrameDetectionResult? = null
+
     override fun analyze(imageProxy: ImageProxy) {
+        frameCounter++
+
+        // Adaptive frame skipping: reduce processing on complex scenes where
+        // detection repeatedly fails, to save CPU for other work.
+        if (shouldSkipFrame()) {
+            imageProxy.close()
+            // Report last known result so UI stays responsive
+            lastResult?.let { onResult(it) }
+            return
+        }
+
         val start = System.nanoTime()
         try {
             val grayMat = extractYPlane(imageProxy)
@@ -44,6 +74,14 @@ class FrameAnalyzer(
             val detection = status.result
             if (downscaled !== grayMat) downscaled.release()
             grayMat.release()
+
+            // Update consecutive miss counter for adaptive frame skipping
+            if (detection != null) {
+                consecutiveMisses = 0
+                frameCounter = 0
+            } else {
+                consecutiveMisses++
+            }
 
             // Scale corners back to original analysis dimensions
             val rawCorners = detection?.corners?.map { pt ->
@@ -74,10 +112,10 @@ class FrameAnalyzer(
             }
 
             val totalMs = (System.nanoTime() - start) / 1_000_000.0
-            Log.d(TAG, "analyze: %.1f ms (detect=%.1f ms, rotation=%d°)".format(
-                totalMs, detection?.detectionMs ?: 0.0, rotation))
+            Log.d(TAG, "analyze: %.1f ms (detect=%.1f ms, rotation=%d°, misses=%d)".format(
+                totalMs, detection?.detectionMs ?: 0.0, rotation, consecutiveMisses))
 
-            onResult(FrameDetectionResult(
+            val result = FrameDetectionResult(
                 normalizedCorners = normalized,
                 sourceWidth = displayWidth,
                 sourceHeight = displayHeight,
@@ -87,10 +125,32 @@ class FrameAnalyzer(
                 stabilityProgress = smoother.stabilityProgress,
                 confidence = smoother.averageConfidence,
                 isPartialDocument = status.isPartialDocument
-            ))
+            )
+            lastResult = result
+            onResult(result)
         } finally {
             imageProxy.close()
         }
+    }
+
+    /**
+     * Determines whether the current frame should be skipped based on
+     * consecutive detection misses.
+     *
+     * - High confidence / recent detection: process every frame
+     * - 5+ consecutive misses: skip every other frame (process 1 of 2)
+     * - 15+ consecutive misses: skip 2 of every 3 frames (process 1 of 3)
+     */
+    private fun shouldSkipFrame(): Boolean {
+        if (consecutiveMisses < SKIP_TIER1_THRESHOLD) return false
+
+        if (consecutiveMisses >= SKIP_TIER2_THRESHOLD) {
+            // Process every 3rd frame
+            return (frameCounter % 3) != 0
+        }
+
+        // Process every 2nd frame
+        return (frameCounter % 2) != 0
     }
 
     /**

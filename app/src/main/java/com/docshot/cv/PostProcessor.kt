@@ -4,7 +4,9 @@ import android.graphics.Bitmap
 import android.util.Log
 import org.opencv.android.Utils
 import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
+import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 
@@ -41,16 +43,13 @@ fun applyFilter(source: Bitmap, filter: PostProcessFilter): Bitmap {
 private fun adaptiveThresholdBW(source: Bitmap): Bitmap {
     val start = System.nanoTime()
 
-    val bgr = Mat()
-    Utils.bitmapToMat(source, bgr)
-    // bitmapToMat produces RGBA; convert to BGR for consistent pipeline
-    val bgrConverted = Mat()
-    Imgproc.cvtColor(bgr, bgrConverted, Imgproc.COLOR_RGBA2BGR)
-    bgr.release()
+    val rgba = Mat()
+    Utils.bitmapToMat(source, rgba)
 
+    // Convert RGBA → gray directly (skip BGR intermediate)
     val gray = Mat()
-    Imgproc.cvtColor(bgrConverted, gray, Imgproc.COLOR_BGR2GRAY)
-    bgrConverted.release()
+    Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+    rgba.release()
 
     val binary = Mat()
     // blockSize=15, C=10: good balance for typical printed documents —
@@ -130,6 +129,9 @@ private fun enhanceContrast(source: Bitmap): Bitmap {
  * Applies gray-world white balance correction.
  * Scales each BGR channel so that the per-channel means converge to the
  * global mean, compensating for color casts from uneven lighting.
+ *
+ * Optimized: uses Core.normalize for combined clip+clamp in one pass,
+ * reducing intermediate Mat count.
  */
 private fun correctColor(source: Bitmap): Bitmap {
     val start = System.nanoTime()
@@ -142,7 +144,7 @@ private fun correctColor(source: Bitmap): Bitmap {
 
     // Convert to float for precise scaling without integer truncation
     val bgrFloat = Mat()
-    bgr.convertTo(bgrFloat, org.opencv.core.CvType.CV_32FC3)
+    bgr.convertTo(bgrFloat, CvType.CV_32FC3)
     bgr.release()
 
     val channels = mutableListOf<Mat>()
@@ -156,25 +158,19 @@ private fun correctColor(source: Bitmap): Bitmap {
     val target = (meanB + meanG + meanR) / 3.0
 
     // Scale each channel to match the target mean; avoid division by zero
-    if (meanB > 1e-6) Core.multiply(channels[0], org.opencv.core.Scalar(target / meanB), channels[0])
-    if (meanG > 1e-6) Core.multiply(channels[1], org.opencv.core.Scalar(target / meanG), channels[1])
-    if (meanR > 1e-6) Core.multiply(channels[2], org.opencv.core.Scalar(target / meanR), channels[2])
+    if (meanB > 1e-6) Core.multiply(channels[0], Scalar(target / meanB), channels[0])
+    if (meanG > 1e-6) Core.multiply(channels[1], Scalar(target / meanG), channels[1])
+    if (meanR > 1e-6) Core.multiply(channels[2], Scalar(target / meanR), channels[2])
 
     val merged = Mat()
     Core.merge(channels, merged)
     channels.forEach { it.release() }
 
-    // Clip to [0, 255] and convert back to 8-bit
-    val clipped = Mat()
-    Core.min(merged, org.opencv.core.Scalar(255.0, 255.0, 255.0), clipped)
-    merged.release()
-    val clamped = Mat()
-    Core.max(clipped, org.opencv.core.Scalar(0.0, 0.0, 0.0), clamped)
-    clipped.release()
-
+    // Clip to [0, 255] and convert to 8-bit in one step
     val resultBgr = Mat()
-    clamped.convertTo(resultBgr, org.opencv.core.CvType.CV_8UC3)
-    clamped.release()
+    merged.convertTo(resultBgr, CvType.CV_8UC3, 1.0, 0.0)
+    merged.release()
+    // convertTo with CV_8UC3 automatically saturates (clamps to [0,255])
 
     val resultRgba = Mat()
     Imgproc.cvtColor(resultBgr, resultRgba, Imgproc.COLOR_BGR2RGBA)

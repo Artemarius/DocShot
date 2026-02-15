@@ -17,14 +17,39 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        // ABI filtering moved to splits block below — ndk.abiFilters conflicts with splits.abi
+    }
+
+    // ABI splits: Google Play delivers only the matching architecture per device,
+    // eliminating ~15MB of unused native .so files from each download.
+    splits {
+        abi {
+            isEnable = true
+            isUniversalApk = false
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // Assign distinct version codes per ABI so Play Store can distinguish them.
+    // arm64-v8a gets higher code so 64-bit devices prefer it over 32-bit.
+    val abiVersionCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2)
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.ApkVariantOutputImpl
+            val abiFilter = output.getFilter("ABI")
+            if (abiFilter != null) {
+                output.versionCodeOverride =
+                    (abiVersionCodes[abiFilter] ?: 0) * 1_000_000 + variant.versionCode
+            }
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

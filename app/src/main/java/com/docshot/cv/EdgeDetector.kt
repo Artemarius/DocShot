@@ -9,6 +9,15 @@ import org.opencv.imgproc.Imgproc
 
 private const val TAG = "DocShot:Edge"
 
+// Cached structuring kernels — immutable, created once and reused across calls.
+// Avoids per-frame allocation of these tiny Mats.
+private val kernel3x3: Mat by lazy {
+    Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+}
+private val kernel5x5: Mat by lazy {
+    Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+}
+
 /**
  * Runs Canny edge detection with automatic or explicit threshold selection.
  * When [thresholdLow] and [thresholdHigh] are <= 0 (default), thresholds are
@@ -33,9 +42,7 @@ fun detectEdges(
 
     // Morphological close (dilate then erode) bridges gaps in document edges
     // without bloating them — dilate-only tends to thicken text edges too much
-    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
-    Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
-    kernel.release()
+    Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel3x3)
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
     Log.d(TAG, "detectEdges: %.1f ms (median=%.0f, low=%.0f, high=%.0f)".format(ms, median, low, high))
@@ -59,9 +66,7 @@ fun detectEdgesHeavyMorph(grayscale: Mat): Mat {
     Imgproc.Canny(grayscale, edges, low, high)
 
     // 5x5 morph close: bridges wider gaps in edges caused by texture interference
-    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
-    Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
-    kernel.release()
+    Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel5x5)
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
     Log.d(TAG, "detectEdgesHeavyMorph: %.1f ms (median=%.0f, low=%.0f, high=%.0f)".format(ms, median, low, high))

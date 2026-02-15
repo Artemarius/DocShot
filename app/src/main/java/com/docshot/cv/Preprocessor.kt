@@ -36,8 +36,18 @@ enum class PreprocessStrategy {
 data class SceneAnalysis(
     val meanIntensity: Double,
     val stddevIntensity: Double,
-    val strategies: List<PreprocessStrategy>
+    val strategies: List<PreprocessStrategy>,
+    /** Grayscale Mat produced during analysis. Caller must release when done, or pass to preprocessing. */
+    val grayMat: Mat? = null
 )
+
+/** Maximum number of frames to cache a SceneAnalysis result. */
+private const val SCENE_CACHE_FRAMES = 10
+
+// Scene analysis cache — avoids recomputing mean/stddev/strategy list every frame.
+// Scene lighting rarely changes faster than ~333ms (10 frames at 30fps).
+private var cachedAnalysis: SceneAnalysis? = null
+private var cacheFrameCounter = 0
 
 /**
  * Converts a BGR/RGBA input to a blurred grayscale image suitable for edge detection.
@@ -54,16 +64,23 @@ fun preprocess(input: Mat): Mat {
  *
  * @param input BGR, RGBA, or grayscale image (not modified).
  * @param strategy The preprocessing approach to use.
+ * @param pool Optional Mat pool for intermediate allocations.
+ * @param sharedGray Optional pre-computed grayscale Mat (from [analyzeScene]). Not released by this function.
  */
-fun preprocessWithStrategy(input: Mat, strategy: PreprocessStrategy): Mat {
+fun preprocessWithStrategy(
+    input: Mat,
+    strategy: PreprocessStrategy,
+    pool: MatPool? = null,
+    sharedGray: Mat? = null
+): Mat {
     val start = System.nanoTime()
 
     val result = when (strategy) {
-        PreprocessStrategy.STANDARD -> preprocessStandard(input)
-        PreprocessStrategy.CLAHE_ENHANCED -> preprocessClahe(input)
-        PreprocessStrategy.SATURATION_CHANNEL -> preprocessSaturation(input)
-        PreprocessStrategy.BILATERAL -> preprocessBilateral(input)
-        PreprocessStrategy.HEAVY_MORPH -> preprocessStandard(input) // edge detector applies heavier morph
+        PreprocessStrategy.STANDARD -> preprocessStandard(input, pool, sharedGray)
+        PreprocessStrategy.CLAHE_ENHANCED -> preprocessClahe(input, pool, sharedGray)
+        PreprocessStrategy.SATURATION_CHANNEL -> preprocessSaturation(input, pool)
+        PreprocessStrategy.BILATERAL -> preprocessBilateral(input, pool, sharedGray)
+        PreprocessStrategy.HEAVY_MORPH -> preprocessStandard(input, pool, sharedGray) // edge detector applies heavier morph
     }
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
@@ -75,6 +92,10 @@ fun preprocessWithStrategy(input: Mat, strategy: PreprocessStrategy): Mat {
  * Fast scene analysis to determine which preprocessing strategies are worth trying.
  * Runs in <2ms by computing only mean and stddev of a grayscale version.
  *
+ * Results are cached for [SCENE_CACHE_FRAMES] frames to avoid redundant computation.
+ * The returned [SceneAnalysis.grayMat] can be passed to [preprocessWithStrategy] as
+ * `sharedGray` to avoid redundant grayscale conversion.
+ *
  * Strategy selection logic:
  * - Low light (mean < 80) or low contrast (stddev < 30): try CLAHE first
  * - Color input (3+ channels): include SATURATION_CHANNEL
@@ -82,19 +103,34 @@ fun preprocessWithStrategy(input: Mat, strategy: PreprocessStrategy): Mat {
  * - BILATERAL and HEAVY_MORPH as last resorts
  *
  * @param input BGR, RGBA, or grayscale image.
+ * @param useCache Whether to use/update the frame-based cache. Disable for one-shot capture.
  * @return Ordered list of strategies to try, most promising first.
  */
-fun analyzeScene(input: Mat): SceneAnalysis {
+fun analyzeScene(input: Mat, useCache: Boolean = true): SceneAnalysis {
+    // Return cached result if still fresh (strategies depend on lighting, not content)
+    if (useCache) {
+        val cached = cachedAnalysis
+        if (cached != null && cacheFrameCounter < SCENE_CACHE_FRAMES) {
+            cacheFrameCounter++
+            // Don't return a grayMat from cache — it may have been released
+            return cached.copy(grayMat = null)
+        }
+    }
+
     val start = System.nanoTime()
 
-    // Convert to gray for stats (reuse if already gray)
-    val gray = if (input.channels() == 1) {
-        input
+    // Convert to gray for stats — keep it for sharing with preprocessing
+    val grayOwned: Mat?
+    val gray: Mat
+    if (input.channels() == 1) {
+        gray = input
+        grayOwned = null
     } else {
         val g = Mat()
         val code = if (input.channels() == 4) Imgproc.COLOR_RGBA2GRAY else Imgproc.COLOR_BGR2GRAY
         Imgproc.cvtColor(input, g, code)
-        g
+        gray = g
+        grayOwned = g
     }
 
     val mean = MatOfDouble()
@@ -104,7 +140,6 @@ fun analyzeScene(input: Mat): SceneAnalysis {
     val stddevVal = stddev.get(0, 0)[0]
     mean.release()
     stddev.release()
-    if (gray !== input) gray.release()
 
     val strategies = mutableListOf<PreprocessStrategy>()
 
@@ -140,18 +175,42 @@ fun analyzeScene(input: Mat): SceneAnalysis {
     Log.d(TAG, "analyzeScene: %.1f ms (mean=%.0f, stddev=%.0f) -> %s".format(
         ms, meanVal, stddevVal, strategies))
 
-    return SceneAnalysis(
+    val result = SceneAnalysis(
         meanIntensity = meanVal,
         stddevIntensity = stddevVal,
-        strategies = strategies
+        strategies = strategies,
+        grayMat = grayOwned  // null if input was already gray
     )
+
+    // Update cache (without grayMat — each frame gets its own)
+    if (useCache) {
+        cachedAnalysis = result.copy(grayMat = null)
+        cacheFrameCounter = 0
+    }
+
+    return result
+}
+
+/**
+ * Invalidates the scene analysis cache. Call when detection context changes
+ * (e.g., transitioning from frame analysis to one-shot capture).
+ */
+fun invalidateSceneCache() {
+    cachedAnalysis = null
+    cacheFrameCounter = 0
 }
 
 // ----------------------------------------------------------------
 // Private strategy implementations
 // ----------------------------------------------------------------
 
-private fun toGray(input: Mat): Mat {
+private fun toGray(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    // Reuse shared gray if available (caller-owned, we copy to avoid aliasing)
+    if (sharedGray != null) {
+        val copy = Mat()
+        sharedGray.copyTo(copy)
+        return copy
+    }
     val gray = Mat()
     when (input.channels()) {
         4 -> Imgproc.cvtColor(input, gray, Imgproc.COLOR_RGBA2GRAY)
@@ -163,8 +222,8 @@ private fun toGray(input: Mat): Mat {
 }
 
 /** Original pipeline: grayscale + 9x9 Gaussian. */
-private fun preprocessStandard(input: Mat): Mat {
-    val gray = toGray(input)
+private fun preprocessStandard(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
     val blurred = Mat()
     // 9x9 Gaussian suppresses text/table edges so document boundary dominates
     Imgproc.GaussianBlur(gray, blurred, Size(9.0, 9.0), 0.0)
@@ -177,8 +236,8 @@ private fun preprocessStandard(input: Mat): Mat {
  * Enhances local contrast in dark or washed-out images so that subtle
  * document boundaries become visible to Canny.
  */
-private fun preprocessClahe(input: Mat): Mat {
-    val gray = toGray(input)
+private fun preprocessClahe(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
     val clahe = Imgproc.createCLAHE(3.0, Size(4.0, 4.0))
     val enhanced = Mat()
     clahe.apply(gray, enhanced)
@@ -198,10 +257,10 @@ private fun preprocessClahe(input: Mat): Mat {
  * have high saturation. Inverting makes the document bright (high intensity)
  * regardless of background color, producing strong edges at the boundary.
  */
-private fun preprocessSaturation(input: Mat): Mat {
+private fun preprocessSaturation(input: Mat, pool: MatPool? = null): Mat {
     if (input.channels() < 3) {
         // Fall back to standard for grayscale input
-        return preprocessStandard(input)
+        return preprocessStandard(input, pool)
     }
 
     val bgr = if (input.channels() == 4) {
@@ -239,8 +298,8 @@ private fun preprocessSaturation(input: Mat): Mat {
  * More expensive than Gaussian but suppresses wood grain, fabric weave,
  * etc. without blurring document boundaries.
  */
-private fun preprocessBilateral(input: Mat): Mat {
-    val gray = toGray(input)
+private fun preprocessBilateral(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
     val filtered = Mat()
     // d=9: neighborhood diameter
     // sigmaColor=75: color space filter sigma (higher = more colors mixed)
