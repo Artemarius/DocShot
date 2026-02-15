@@ -5,14 +5,36 @@ import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import org.opencv.core.MatOfPoint2f
 import kotlin.math.abs
-import kotlin.math.atan2
+import kotlin.math.exp
+import kotlin.math.min
 import kotlin.math.sqrt
 
 private const val TAG = "DocShot:QuadRank"
 
 // Scoring weights for quadrilateral ranking
-private const val WEIGHT_AREA = 0.5
-private const val WEIGHT_ANGLE = 0.5
+private const val WEIGHT_AREA = 0.4
+private const val WEIGHT_ANGLE = 0.4
+private const val WEIGHT_ASPECT = 0.2
+
+/**
+ * Known document aspect ratios (width/height, always <= 1.0 so we use min/max).
+ * Used for aspect-ratio scoring to prefer shapes that match real document formats.
+ */
+private val KNOWN_ASPECT_RATIOS = doubleArrayOf(
+    1.0 / 1.414,  // A4 / A-series (ISO 216)
+    1.0 / 1.294,  // US Letter (8.5 x 11)
+    1.0 / 3.0,    // Receipt (mid-range, covers 1:2.5 to 1:3.5)
+    1.0 / 1.75,   // Business card (3.5 x 2 inches)
+    1.0 / 1.586,  // ID card / credit card (CR-80: 85.6 x 53.98 mm)
+    1.0,          // Square
+)
+
+/**
+ * Gaussian falloff sigma for aspect ratio scoring. Controls how quickly
+ * the score drops as the aspect ratio deviates from a known format.
+ * A difference of 0.15 from any known ratio drops the score significantly.
+ */
+private const val ASPECT_SIGMA = 0.10
 
 /**
  * Result of quadrilateral ranking with scoring metadata.
@@ -33,8 +55,9 @@ data class QuadRankResult(
 /**
  * Ranks all candidate quadrilaterals and returns the best one with scoring metadata.
  * Scoring uses a weighted combination of:
- * - Area (largest preferred, normalized to image area)
- * - Angle regularity (corners close to 90° preferred)
+ * - Area (40%, largest preferred, normalized to image area)
+ * - Angle regularity (40%, corners close to 90° preferred)
+ * - Aspect ratio (20%, matches known document formats preferred)
  * Non-convex quads are rejected outright.
  *
  * The [scoreMargin] in the result indicates how clearly the best candidate
@@ -69,7 +92,10 @@ fun rankQuads(candidates: List<List<Point>>, imageArea: Double): QuadRankResult 
         // Angle regularity: how close each interior angle is to 90°
         val angleScore = angleRegularityScore(quad)
 
-        val score = WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore
+        // Aspect ratio: how well the quad matches known document formats
+        val aspectScore = aspectRatioScore(quad)
+
+        val score = WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore + WEIGHT_ASPECT * aspectScore
         if (score > bestScore) {
             secondBestScore = bestScore
             bestScore = score
@@ -105,6 +131,7 @@ fun rankQuads(candidates: List<List<Point>>, imageArea: Double): QuadRankResult 
  * Scoring uses a weighted combination of:
  * - Area (largest preferred, normalized to image area)
  * - Angle regularity (corners close to 90° preferred)
+ * - Aspect ratio (matches known document formats preferred)
  * Non-convex quads are rejected outright.
  * Returns ordered corners [TL, TR, BR, BL] or null if no valid quad found.
  */
@@ -114,7 +141,7 @@ fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
 
 /**
  * Scores a single quadrilateral using the same weighted combination as [bestQuad]:
- * area (normalized to image area) and angle regularity.
+ * area (normalized to image area), angle regularity, and aspect ratio.
  * Returns a value in [0.0, 1.0] where higher is better.
  *
  * @param quad 4-point polygon (any winding order).
@@ -126,7 +153,47 @@ fun scoreQuad(quad: List<Point>, imageArea: Double): Double {
 
     val areaScore = (quadArea(quad) / imageArea).coerceIn(0.0, 1.0)
     val angleScore = angleRegularityScore(quad)
-    return WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore
+    val aspectScore = aspectRatioScore(quad)
+    return WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore + WEIGHT_ASPECT * aspectScore
+}
+
+/**
+ * Scores how well the quadrilateral's aspect ratio matches known document formats.
+ * Uses a Gaussian falloff from the closest known ratio.
+ *
+ * Returns 1.0 for a perfect match with any known format, drops rapidly
+ * for ratios that don't match any standard document size.
+ *
+ * @param quad 4-point polygon (any winding order).
+ * @return Score in [0.0, 1.0].
+ */
+internal fun aspectRatioScore(quad: List<Point>): Double {
+    require(quad.size == 4) { "Expected 4 points, got ${quad.size}" }
+
+    // Compute edge lengths (4 edges of the quad)
+    val edgeLengths = DoubleArray(4) { i ->
+        val next = (i + 1) % 4
+        distance(quad[i], quad[next])
+    }
+
+    // Average opposite edge pairs to get width and height
+    val side1 = (edgeLengths[0] + edgeLengths[2]) / 2.0
+    val side2 = (edgeLengths[1] + edgeLengths[3]) / 2.0
+
+    if (side1 <= 0.0 || side2 <= 0.0) return 0.0
+
+    // Normalize: aspect ratio as min/max to be orientation-independent (always <= 1.0)
+    val ratio = min(side1, side2) / maxOf(side1, side2)
+
+    // Find minimum distance to any known ratio
+    var minDist = Double.MAX_VALUE
+    for (known in KNOWN_ASPECT_RATIOS) {
+        val dist = abs(ratio - known)
+        if (dist < minDist) minDist = dist
+    }
+
+    // Gaussian falloff: score = exp(-dist² / (2 * sigma²))
+    return exp(-minDist * minDist / (2.0 * ASPECT_SIGMA * ASPECT_SIGMA))
 }
 
 /**
@@ -159,6 +226,15 @@ internal fun angleRegularityScore(quad: List<Point>): Double {
     }
     // Max total deviation is 360° (degenerate), normalize so 0° deviation = 1.0
     return (1.0 - totalDeviation / 360.0).coerceIn(0.0, 1.0)
+}
+
+/**
+ * Euclidean distance between two points.
+ */
+internal fun distance(a: Point, b: Point): Double {
+    val dx = a.x - b.x
+    val dy = a.y - b.y
+    return sqrt(dx * dx + dy * dy)
 }
 
 /**

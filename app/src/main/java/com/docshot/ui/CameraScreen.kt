@@ -168,10 +168,15 @@ fun CameraPreview(
             )
         }
 
-        // "Point at a document" hint when no detection and camera is idle
+        // Hint when no detection and camera is idle
         if (detectionState.normalizedCorners == null && cameraState is CameraUiState.Idle) {
+            val hintText = if (detectionState.isPartialDocument) {
+                "Move back to fit document"
+            } else {
+                "Point at a document"
+            }
             Text(
-                text = "Point at a document",
+                text = hintText,
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 modifier = Modifier

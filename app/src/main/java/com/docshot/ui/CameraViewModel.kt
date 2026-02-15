@@ -46,7 +46,8 @@ data class DetectionUiState(
     val sourceHeight: Int = 0,
     val detectionMs: Double = 0.0,
     val isStable: Boolean = false,
-    val stabilityProgress: Float = 0f
+    val stabilityProgress: Float = 0f,
+    val isPartialDocument: Boolean = false
 )
 
 /** State machine for the capture -> result flow. */
@@ -113,7 +114,8 @@ class CameraViewModel : ViewModel() {
             sourceHeight = result.sourceHeight,
             detectionMs = result.detectionMs,
             isStable = result.isStable,
-            stabilityProgress = result.stabilityProgress
+            stabilityProgress = result.stabilityProgress,
+            isPartialDocument = result.isPartialDocument
         )
 
         // Auto-capture: trigger when stable, high confidence, enabled, and idle

@@ -231,4 +231,90 @@ class QuadScoringTest {
             1.0, result.scoreMargin, 0.001
         )
     }
+
+    // ------------------------------------------------------------------
+    // aspectRatioScore tests
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `aspectRatioScore high for A4 ratio`() {
+        // A4 is 1:1.414, so a 100x141 rectangle
+        val a4 = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 141.4),
+            Point(0.0, 141.4)
+        )
+        val score = aspectRatioScore(a4)
+        assertTrue("A4 aspect ratio score should be > 0.9, got $score", score > 0.9)
+    }
+
+    @Test
+    fun `aspectRatioScore high for receipt ratio`() {
+        // Receipt is ~1:3, so a 100x300 rectangle
+        val receipt = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 300.0),
+            Point(0.0, 300.0)
+        )
+        val score = aspectRatioScore(receipt)
+        assertTrue("Receipt aspect ratio score should be > 0.8, got $score", score > 0.8)
+    }
+
+    @Test
+    fun `aspectRatioScore high for business card ratio`() {
+        // Business card is ~1:1.75, so a 100x175 rectangle
+        val card = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 175.0),
+            Point(0.0, 175.0)
+        )
+        val score = aspectRatioScore(card)
+        assertTrue("Business card aspect ratio score should be > 0.8, got $score", score > 0.8)
+    }
+
+    @Test
+    fun `aspectRatioScore low for extreme ratio`() {
+        // Extreme aspect ratio 1:10 — doesn't match any known format
+        val extreme = listOf(
+            Point(0.0, 0.0),
+            Point(10.0, 0.0),
+            Point(10.0, 100.0),
+            Point(0.0, 100.0)
+        )
+        val score = aspectRatioScore(extreme)
+        assertTrue("Extreme aspect ratio score should be < 0.3, got $score", score < 0.3)
+    }
+
+    @Test
+    fun `scoreQuad includes aspect ratio component`() {
+        // Compare a document-shaped quad vs a very thin strip
+        // Both same area and same angles, but different aspect ratios
+        val documentShaped = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 0.0),
+            Point(100.0, 141.4),
+            Point(0.0, 141.4)
+        )
+        val thinStrip = listOf(
+            Point(0.0, 0.0),
+            Point(10.0, 0.0),
+            Point(10.0, 1414.0),
+            Point(0.0, 1414.0)
+        )
+        // Same image area for both
+        val imageArea = 200.0 * 200.0
+
+        val documentScore = scoreQuad(documentShaped, imageArea)
+        val stripScore = scoreQuad(thinStrip, imageArea)
+
+        // Document-shaped quad should score higher because of better aspect ratio match,
+        // even though the strip has similar area and perfect angles
+        assertTrue(
+            "Document shape ($documentScore) should score higher than thin strip ($stripScore)",
+            documentScore > stripScore
+        )
+    }
 }

@@ -6,8 +6,6 @@ import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
-import kotlin.math.sqrt
-
 private const val TAG = "DocShot:Rectify"
 
 /**
@@ -57,10 +55,4 @@ fun rectify(
     val ms = (System.nanoTime() - start) / 1_000_000.0
     Log.d(TAG, "rectify: %.1f ms (output=%dx%d)".format(ms, outWidth, outHeight))
     return output
-}
-
-private fun distance(a: Point, b: Point): Double {
-    val dx = a.x - b.x
-    val dy = a.y - b.y
-    return sqrt(dx * dx + dy * dy)
 }

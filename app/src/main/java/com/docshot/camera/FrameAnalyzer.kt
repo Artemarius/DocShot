@@ -3,7 +3,7 @@ package com.docshot.camera
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import com.docshot.cv.detectDocument
+import com.docshot.cv.detectDocumentWithStatus
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.Point
@@ -40,7 +40,8 @@ class FrameAnalyzer(
             val downscaled = downscaleIfNeeded(grayMat)
             val scaleFactor = analysisWidth.toDouble() / downscaled.cols()
 
-            val detection = detectDocument(downscaled)
+            val status = detectDocumentWithStatus(downscaled)
+            val detection = status.result
             if (downscaled !== grayMat) downscaled.release()
             grayMat.release()
 
@@ -84,7 +85,8 @@ class FrameAnalyzer(
                 totalMs = totalMs,
                 isStable = smoother.isStable,
                 stabilityProgress = smoother.stabilityProgress,
-                confidence = smoother.averageConfidence
+                confidence = smoother.averageConfidence,
+                isPartialDocument = status.isPartialDocument
             ))
         } finally {
             imageProxy.close()
@@ -175,5 +177,6 @@ data class FrameDetectionResult(
     val totalMs: Double,
     val isStable: Boolean = false,
     val stabilityProgress: Float = 0f,
-    val confidence: Double = 0.0
+    val confidence: Double = 0.0,
+    val isPartialDocument: Boolean = false
 )

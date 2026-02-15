@@ -11,6 +11,12 @@ private const val TAG = "DocShot:Detector"
 /** Minimum confidence to accept a detection. Below this, detectDocument() returns null. */
 const val MIN_CONFIDENCE_THRESHOLD = 0.35
 
+/** Multi-strategy time budget in milliseconds. Stops trying additional strategies after this. */
+private const val STRATEGY_TIME_BUDGET_MS = 25.0
+
+/** Confidence threshold above which we short-circuit (no need to try more strategies). */
+private const val STRATEGY_SHORT_CIRCUIT_CONFIDENCE = 0.65
+
 /**
  * Result of document detection (corners only, no rectification).
  * @param corners Detected corner positions [TL, TR, BR, BL] in source image coordinates.
@@ -36,11 +42,24 @@ data class DetectionResult(
 )
 
 /**
+ * Status from detection including partial-document flag.
+ * @param result Detection result, or null if no valid document found.
+ * @param isPartialDocument True if a large contour touching 2+ frame edges was
+ *   found but no valid quad could be extracted — suggests the document extends
+ *   beyond the camera frame.
+ */
+data class DetectionStatus(
+    val result: DocumentCorners?,
+    val isPartialDocument: Boolean
+)
+
+/**
  * Runs detection only: finds the best document quadrilateral without rectifying.
- * Used by real-time frame analysis where only corners are needed for the overlay.
+ * Uses multi-strategy preprocessing — tries alternative strategies if the primary
+ * one yields low confidence, within a 25ms time budget.
  *
- * Pipeline stages:
- * 1. Preprocess (grayscale + blur)
+ * Pipeline stages (per strategy):
+ * 1. Preprocess (strategy-dependent)
  * 2. Canny edge detection (auto-threshold)
  * 3. Contour finding + polygon approximation
  * 4. Quadrilateral scoring and ranking
@@ -52,84 +71,141 @@ data class DetectionResult(
  * @param input BGR, RGBA, or grayscale image (not modified).
  */
 fun detectDocument(input: Mat): DocumentCorners? {
+    return detectDocumentWithStatus(input).result
+}
+
+/**
+ * Like [detectDocument] but also reports whether a partial document was detected.
+ * The `isPartialDocument` flag is OR'd across all strategies tried.
+ *
+ * @param input BGR, RGBA, or grayscale image (not modified).
+ */
+fun detectDocumentWithStatus(input: Mat): DetectionStatus {
     val start = System.nanoTime()
 
+    val sceneAnalysis = analyzeScene(input)
+    val strategies = sceneAnalysis.strategies
+
+    var bestResult: DocumentCorners? = null
+    var anyPartialDocument = false
+
+    for (strategy in strategies) {
+        val elapsed = (System.nanoTime() - start) / 1_000_000.0
+        if (elapsed > STRATEGY_TIME_BUDGET_MS && bestResult != null) {
+            Log.d(TAG, "Strategy time budget exceeded (%.1f ms), stopping".format(elapsed))
+            break
+        }
+
+        val strategyResult = detectWithStrategy(input, strategy)
+        anyPartialDocument = anyPartialDocument || strategyResult.isPartialDocument
+
+        val candidate = strategyResult.result
+        if (candidate != null) {
+            if (bestResult == null || candidate.confidence > bestResult.confidence) {
+                bestResult = candidate
+            }
+            if (bestResult.confidence >= STRATEGY_SHORT_CIRCUIT_CONFIDENCE) {
+                Log.d(TAG, "Short-circuit: confidence %.2f >= %.2f with $strategy".format(
+                    bestResult.confidence, STRATEGY_SHORT_CIRCUIT_CONFIDENCE))
+                break
+            }
+        }
+    }
+
+    // Apply minimum confidence threshold
+    if (bestResult != null && bestResult.confidence < MIN_CONFIDENCE_THRESHOLD) {
+        val ms = (System.nanoTime() - start) / 1_000_000.0
+        Log.d(TAG, "Detection suppressed: confidence %.2f < %.2f threshold (%.1f ms)".format(
+            bestResult.confidence, MIN_CONFIDENCE_THRESHOLD, ms))
+        return DetectionStatus(result = null, isPartialDocument = anyPartialDocument)
+    }
+
+    val ms = (System.nanoTime() - start) / 1_000_000.0
+    if (bestResult != null) {
+        // Update detection time to include the full multi-strategy cost
+        val finalResult = bestResult.copy(detectionMs = ms)
+        Log.d(TAG, "detectDocument: %.1f ms, confidence: %.2f".format(ms, finalResult.confidence))
+        return DetectionStatus(result = finalResult, isPartialDocument = anyPartialDocument)
+    }
+
+    Log.d(TAG, "detectDocument: %.1f ms — no document found across %d strategies".format(
+        ms, strategies.size))
+    return DetectionStatus(result = null, isPartialDocument = anyPartialDocument)
+}
+
+/**
+ * Runs detection with a single preprocessing strategy.
+ * Extracted from the original `detectDocument()` body — identical logic,
+ * parameterized by [strategy].
+ */
+private fun detectWithStrategy(input: Mat, strategy: PreprocessStrategy): DetectionStatus {
+    val start = System.nanoTime()
     val imageSize = Size(input.cols().toDouble(), input.rows().toDouble())
     val imageArea = imageSize.width * imageSize.height
 
-    val gray = preprocess(input)
-    val edges = detectEdges(gray)
-    gray.release()
+    val preprocessed = preprocessWithStrategy(input, strategy)
+    val edges = if (strategy == PreprocessStrategy.HEAVY_MORPH) {
+        detectEdgesHeavyMorph(preprocessed)
+    } else {
+        detectEdges(preprocessed)
+    }
+    preprocessed.release()
 
-    val quads = findQuadrilaterals(edges, imageSize)
-    // NOTE: edges Mat is kept alive until after confidence computation
-    // so QuadValidator can measure edge support along the detected quad.
+    val contourAnalysis = analyzeContours(edges, imageSize)
+    val quads = contourAnalysis.quads
 
     if (quads.isEmpty()) {
         edges.release()
         val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "detectDocument: %.1f ms — no quads found".format(ms))
-        return null
+        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms — no quads".format(ms))
+        return DetectionStatus(
+            result = null,
+            isPartialDocument = contourAnalysis.hasPartialDocument
+        )
     }
 
     val rankResult = rankQuads(quads, imageArea)
     if (rankResult.quad == null) {
         edges.release()
         val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "detectDocument: %.1f ms — no valid quad after scoring".format(ms))
-        return null
+        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms — no valid quad after scoring".format(ms))
+        return DetectionStatus(
+            result = null,
+            isPartialDocument = contourAnalysis.hasPartialDocument
+        )
     }
     val corners = rankResult.quad
 
     // Measure how well the detected quad aligns with actual Canny edge pixels.
-    // Both `edges` and `corners` are at the same resolution (input image size,
-    // no internal downscaling in this function), so coordinates match directly.
     val edgeDensity = QuadValidator.edgeDensityScore(edges, corners)
     edges.release()
-    Log.d(TAG, "Edge density: %.2f".format(edgeDensity))
 
     // Confidence = weighted combination of three complementary signals:
     //   1. Quad score (60%) — geometric quality: area coverage + angle regularity.
-    //      Highest weight because a well-shaped, large quad is the strongest
-    //      indicator of a real document.
-    //   2. Area ratio (20%) — quad area relative to image area. Penalizes tiny
-    //      detections that are likely noise or distant objects.
-    //   3. Edge density (20%) — fraction of the quad perimeter supported by
-    //      Canny edge pixels. Validates that the quad boundary corresponds to
-    //      real image edges, not an artifact of contour approximation.
+    //   2. Area ratio (20%) — quad area relative to image area.
+    //   3. Edge density (20%) — fraction of the quad perimeter supported by edge pixels.
     val quadScore = scoreQuad(corners, imageArea)
     val areaRatio = (quadArea(corners) / imageArea).coerceIn(0.0, 1.0)
 
-    // Score margin penalty: when multiple candidates have similar scores,
-    // reduce confidence to signal ambiguity. Only applies when there are
-    // 2+ candidates. Margin of 0.0 (identical scores) applies 0.5x penalty,
-    // margin of 1.0 (sole candidate) applies no penalty.
-    // Formula: 1.0 - 0.5 * (1.0 - scoreMargin) = 0.5 + 0.5 * scoreMargin
+    // Score margin penalty for ambiguous multi-candidate scenes
     val marginFactor = if (rankResult.candidateCount >= 2) {
         0.5 + 0.5 * rankResult.scoreMargin
     } else {
-        1.0 // sole candidate, no ambiguity
+        1.0
     }
     val confidence = (0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity) * marginFactor
 
-    Log.d(TAG, "Candidates: %d, scoreMargin: %.2f, marginFactor: %.2f".format(
-        rankResult.candidateCount, rankResult.scoreMargin, marginFactor))
-
-    // Suppress low-confidence detections to reduce false positives.
-    // Threshold of 0.35 is slightly permissive — will be tuned with the
-    // Phase 7 Group G test dataset.
-    if (confidence < MIN_CONFIDENCE_THRESHOLD) {
-        val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "Detection suppressed: confidence %.2f < %.2f threshold".format(confidence, MIN_CONFIDENCE_THRESHOLD))
-        return null
-    }
-
     val ms = (System.nanoTime() - start) / 1_000_000.0
-    Log.d(TAG, "detectDocument: %.1f ms, confidence: %.2f".format(ms, confidence))
-    return DocumentCorners(
-        corners = corners,
-        detectionMs = ms,
-        confidence = confidence
+    Log.d(TAG, "detectWithStrategy($strategy): %.1f ms, confidence=%.2f (quad=%.2f, area=%.2f, edge=%.2f, margin=%.2f)".format(
+        ms, confidence, quadScore, areaRatio, edgeDensity, marginFactor))
+
+    return DetectionStatus(
+        result = DocumentCorners(
+            corners = corners,
+            detectionMs = ms,
+            confidence = confidence
+        ),
+        isPartialDocument = contourAnalysis.hasPartialDocument
     )
 }
 
