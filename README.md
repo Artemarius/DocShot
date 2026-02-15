@@ -16,25 +16,20 @@ Every phone has a document scanner buried 3 taps deep in the camera app, and it 
 5. **Homography & warp** — `getPerspectiveTransform` → `warpPerspective` to a properly-sized output rectangle
 6. **Post-processing** — Optional adaptive thresholding for black-and-white document mode
 
-**ML-enhanced detection (Phase 2, planned):**
-- Lightweight document segmentation model (MobileNetV3 backbone + U-Net decoder) via TensorFlow Lite
-- Handles cluttered backgrounds, partial occlusion, and low-contrast edges where classical methods struggle
-- Classical rectification pipeline remains unchanged — ML only replaces the boundary detection step
-
 ## Features
 
 - **Single-tap capture** — Tap shutter or let auto-capture trigger when a stable document is detected
 - **Gallery import** — Rectify existing photos from your gallery
 - **Real-time preview** — Live quadrilateral overlay showing detected document boundary
 - **Auto-crop** — Output contains only the document, properly oriented
-- **Batch mode** (planned) — Process multiple pages in sequence
+- **Post-processing** — B&W adaptive threshold, CLAHE contrast enhancement, white balance correction
+- **Manual fallback** — Draggable corner handles with magnifier loupe when auto-detection needs help
 
 ## Tech Stack
 
 - **Language:** Kotlin
 - **Camera:** CameraX (Camera2 backend)
 - **Computer Vision:** OpenCV Android SDK 4.x
-- **ML Inference:** TensorFlow Lite (Phase 2)
 - **Build:** Gradle with Kotlin DSL
 - **Min SDK:** 24 (Android 7.0) / **Target SDK:** 34
 
@@ -75,9 +70,6 @@ app/src/main/java/com/docshot/
 │   ├── QuadRanker.kt       # Quadrilateral candidate evaluation
 │   ├── Rectifier.kt        # Homography computation + warp
 │   └── PostProcessor.kt    # Enhancement filters (B&W, contrast)
-├── ml/                     # ML document segmentation (Phase 2)
-│   ├── DocSegmenter.kt     # TFLite model inference
-│   └── MaskToQuad.kt       # Convert segmentation mask to quadrilateral
 └── util/                   # Image I/O, permissions, gallery save
 ```
 
@@ -99,7 +91,6 @@ Samsung Galaxy S21 (Snapdragon 888, 8GB RAM, Android 14)
 - Javed et al., *Real-Time Document Localization in Natural Images by Recursive Application of a CNN* (2017)
 - OpenCV `findContours`, `approxPolyDP`, `getPerspectiveTransform` documentation
 - CameraX documentation: https://developer.android.com/media/camera/camerax
-- Das et al., *DewarpNet: Single-Image Document Unwarping With Stacked 3D and 2D Regression Networks* (2019) — reference for Phase 2 dewarping
 
 ## License
 

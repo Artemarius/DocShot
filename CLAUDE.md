@@ -8,7 +8,7 @@ Android document rectification app. Camera input → automatic document boundary
 - **UI:** Jetpack Compose + Material 3
 - **Camera:** CameraX with Camera2 backend
 - **CV:** OpenCV Android SDK 4.10+
-- **ML (Phase 2):** TensorFlow Lite
+- **ML:** Dropped — classical CV pipeline is production-ready without it
 - **Build:** Gradle Kotlin DSL, AGP 8.x
 - **Min SDK:** 24 / Target SDK: 34
 - **Test device:** Samsung Galaxy S21 (Snapdragon 888)
@@ -51,14 +51,13 @@ app/src/main/java/com/docshot/
 ├── ui/          # Compose screens + navigation
 ├── camera/      # CameraX setup, frame analysis
 ├── cv/          # Document detection, rectification, post-processing
-├── ml/          # TFLite segmentation (Phase 2)
 └── util/        # Permissions, image I/O, gallery save
 ```
 
 ## Phase Boundaries
-- **Phase 1-5:** Classical CV only, no ML dependencies
-- **Phase 6+:** Add TensorFlow Lite, ML model, A/B comparison with classical
-- Keep classical pipeline fully functional even after ML is added (user toggle or fallback)
+- **Phase 1-8:** Classical CV pipeline, fully complete
+- **Phase 9:** Flash support
+- **Phase 10:** Google Play release
 
 ## Performance Budget
 - Detection per frame: < 30ms (for real-time preview overlay)
@@ -72,7 +71,6 @@ app/src/main/java/com/docshot/
 - OpenCV Android SDK: 4.12.0
 - CameraX: 1.4.1
 - Compose BOM: 2024.12.01
-- TFLite (Phase 2): 2.16.x
 
 ## Local Development Environment (Windows)
 - **OS:** Windows 10 Pro (10.0.19045)
