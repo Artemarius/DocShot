@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.docshot.cv.detectDocument
 import com.docshot.cv.rectify
+import com.docshot.cv.rectifyWithAspectRatio
 import com.docshot.cv.refineCorners
 import com.docshot.util.bitmapToMat
 import com.docshot.util.loadGalleryImage
@@ -181,6 +182,54 @@ class GalleryViewModel : ViewModel() {
         _state.value = GalleryUiState.Idle
     }
 
+    /**
+     * Re-warps the document from the original image with an adjusted aspect ratio.
+     * Gallery imports have no camera intrinsics.
+     */
+    fun reWarpWithAspectRatio(targetRatio: Double) {
+        val current = _state.value
+        if (current !is GalleryUiState.Result) return
+        val data = current.data
+        if (data.corners.size != 4) return
+
+        viewModelScope.launch(Dispatchers.Default) {
+            var mat: Mat? = null
+            var rectifiedMat: Mat? = null
+            try {
+                mat = bitmapToMat(data.originalBitmap)
+                rectifiedMat = rectifyWithAspectRatio(
+                    mat, data.corners, targetRatio, Imgproc.INTER_CUBIC
+                )
+
+                var newBitmap = matToBitmap(rectifiedMat)
+
+                // Apply stored rotation: auto-orientation + manual rotation
+                val totalSteps = (data.autoRotationSteps + data.manualRotationSteps) % 4
+                if (totalSteps > 0) {
+                    val degrees = totalSteps * 90f
+                    val rotMatrix = android.graphics.Matrix().apply { postRotate(degrees) }
+                    val rotated = Bitmap.createBitmap(
+                        newBitmap, 0, 0, newBitmap.width, newBitmap.height, rotMatrix, true
+                    )
+                    if (rotated !== newBitmap) newBitmap.recycle()
+                    newBitmap = rotated
+                }
+
+                val oldBitmap = data.rectifiedBitmap
+
+                _state.value = GalleryUiState.Result(
+                    data.copy(rectifiedBitmap = newBitmap)
+                )
+                oldBitmap.recycle()
+            } catch (e: Exception) {
+                Log.e(TAG, "reWarpWithAspectRatio failed: ${e.message}")
+            } finally {
+                mat?.release()
+                rectifiedMat?.release()
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         val current = _state.value
@@ -225,7 +274,9 @@ class GalleryViewModel : ViewModel() {
                     CaptureResultData(
                         originalBitmap = bitmap,
                         rectifiedBitmap = rectifiedBitmap,
-                        pipelineMs = ms
+                        pipelineMs = ms,
+                        corners = refined,
+                        normalizedCorners = cornersToNormalized(refined, bitmap.width, bitmap.height)
                     )
                 )
                 // Don't null loadedBitmap — it's now owned by CaptureResultData as originalBitmap
@@ -246,6 +297,24 @@ class GalleryViewModel : ViewModel() {
                 }
             }
         }
+    }
+}
+
+/**
+ * Converts full-res pixel corners to a flat FloatArray of 8 normalized [0,1] values.
+ * Layout: [x0, y0, x1, y1, x2, y2, x3, y3]
+ */
+private fun cornersToNormalized(
+    corners: List<Point>,
+    imageWidth: Int,
+    imageHeight: Int
+): FloatArray {
+    if (corners.size != 4 || imageWidth <= 0 || imageHeight <= 0) return floatArrayOf()
+    val w = imageWidth.toFloat()
+    val h = imageHeight.toFloat()
+    return FloatArray(8) { i ->
+        val corner = corners[i / 2]
+        if (i % 2 == 0) (corner.x / w).toFloat() else (corner.y / h).toFloat()
     }
 }
 

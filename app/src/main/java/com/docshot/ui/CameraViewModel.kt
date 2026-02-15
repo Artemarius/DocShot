@@ -14,8 +14,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.docshot.camera.FrameAnalyzer
 import com.docshot.camera.processCapture
+import com.docshot.cv.CameraIntrinsics
 import com.docshot.cv.detectAndCorrect
 import com.docshot.cv.rectify
+import com.docshot.cv.rectifyWithAspectRatio
 import com.docshot.cv.refineCorners
 import com.docshot.util.bitmapToMat
 import com.docshot.util.matToBitmap
@@ -85,7 +87,10 @@ data class CaptureResultData(
     val pipelineMs: Double,
     val confidence: Double = 0.0,
     val corners: List<org.opencv.core.Point> = emptyList(),
-    val normalizedCorners: FloatArray = floatArrayOf()
+    val normalizedCorners: FloatArray = floatArrayOf(),
+    val cameraIntrinsics: CameraIntrinsics? = null,
+    val autoRotationSteps: Int = 0,  // 0-3: auto-orientation from detectAndCorrect
+    val manualRotationSteps: Int = 0  // 0-3: additional manual rotations by user
 )
 
 class CameraViewModel : ViewModel() {
@@ -129,6 +134,14 @@ class CameraViewModel : ViewModel() {
 
     /** Whether an AF trigger request is in flight. */
     private var _isAfTriggering = false
+
+    /** Camera intrinsics for homography-based aspect ratio verification. */
+    private var _cameraIntrinsics: CameraIntrinsics? = null
+
+    /** Called from CameraScreen after binding camera to extract lens calibration. */
+    fun setCameraIntrinsics(intrinsics: CameraIntrinsics) {
+        _cameraIntrinsics = intrinsics
+    }
 
     /** Read-only accessor for debug overlay. */
     val isAfLocked: Boolean get() = _isAfLocked
@@ -264,7 +277,9 @@ class CameraViewModel : ViewModel() {
                                             pipelineMs = result.pipelineMs,
                                             confidence = result.confidence,
                                             corners = result.corners,
-                                            normalizedCorners = normCorners
+                                            normalizedCorners = normCorners,
+                                            cameraIntrinsics = _cameraIntrinsics,
+                                            autoRotationSteps = result.autoRotationSteps
                                         )
                                     )
                                 } else {
@@ -390,6 +405,12 @@ class CameraViewModel : ViewModel() {
                     originalBitmap.width,
                     originalBitmap.height
                 )
+                val autoSteps = when (orientation) {
+                    com.docshot.cv.DocumentOrientation.CORRECT -> 0
+                    com.docshot.cv.DocumentOrientation.ROTATE_90 -> 1
+                    com.docshot.cv.DocumentOrientation.ROTATE_180 -> 2
+                    com.docshot.cv.DocumentOrientation.ROTATE_270 -> 3
+                }
                 _cameraState.value = CameraUiState.Result(
                     CaptureResultData(
                         originalBitmap = originalBitmap,
@@ -397,7 +418,9 @@ class CameraViewModel : ViewModel() {
                         pipelineMs = pipelineMs,
                         confidence = confidence,
                         corners = adjustedCorners,
-                        normalizedCorners = normCorners
+                        normalizedCorners = normCorners,
+                        cameraIntrinsics = _cameraIntrinsics,
+                        autoRotationSteps = autoSteps
                     )
                 )
             } catch (e: Exception) {
@@ -435,6 +458,55 @@ class CameraViewModel : ViewModel() {
     }
 
     /**
+     * Re-warps the document from the original image with an adjusted aspect ratio.
+     * Re-applies orientation correction. Filter re-application is handled by
+     * ResultScreen observing the bitmap change.
+     */
+    fun reWarpWithAspectRatio(targetRatio: Double) {
+        val state = _cameraState.value
+        if (state !is CameraUiState.Result) return
+        val data = state.data
+        if (data.corners.size != 4) return
+
+        viewModelScope.launch(Dispatchers.Default) {
+            var mat: Mat? = null
+            var rectifiedMat: Mat? = null
+            try {
+                mat = bitmapToMat(data.originalBitmap)
+                rectifiedMat = rectifyWithAspectRatio(
+                    mat, data.corners, targetRatio, Imgproc.INTER_CUBIC
+                )
+
+                var newBitmap = matToBitmap(rectifiedMat)
+
+                // Apply stored rotation: auto-orientation + manual rotation
+                val totalSteps = (data.autoRotationSteps + data.manualRotationSteps) % 4
+                if (totalSteps > 0) {
+                    val degrees = totalSteps * 90f
+                    val rotMatrix = android.graphics.Matrix().apply { postRotate(degrees) }
+                    val rotated = Bitmap.createBitmap(
+                        newBitmap, 0, 0, newBitmap.width, newBitmap.height, rotMatrix, true
+                    )
+                    if (rotated !== newBitmap) newBitmap.recycle()
+                    newBitmap = rotated
+                }
+
+                val oldBitmap = data.rectifiedBitmap
+
+                _cameraState.value = CameraUiState.Result(
+                    data.copy(rectifiedBitmap = newBitmap)
+                )
+                oldBitmap.recycle()
+            } catch (e: Exception) {
+                Log.e(TAG, "reWarpWithAspectRatio failed: ${e.message}")
+            } finally {
+                mat?.release()
+                rectifiedMat?.release()
+            }
+        }
+    }
+
+    /**
      * Rotates the rectified bitmap 90 degrees clockwise and emits an updated Result.
      * Corners are unchanged since they reference the original image.
      */
@@ -453,7 +525,10 @@ class CameraViewModel : ViewModel() {
         if (rotated !== oldBitmap) oldBitmap.recycle()
 
         _cameraState.value = CameraUiState.Result(
-            data.copy(rectifiedBitmap = rotated)
+            data.copy(
+                rectifiedBitmap = rotated,
+                manualRotationSteps = (data.manualRotationSteps + 1) % 4
+            )
         )
     }
 

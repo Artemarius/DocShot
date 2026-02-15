@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
 private fun MainContent() {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showingResult by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val preferencesRepository = remember { UserPreferencesRepository(context) }
 
@@ -67,40 +68,46 @@ private fun MainContent() {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FilterChip(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    label = { Text("Camera") }
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                FilterChip(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    label = { Text("Import") },
-                    modifier = Modifier.padding(start = 8.dp)
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = { showSettings = true }) {
-                    Icon(
-                        imageVector = Icons.Filled.Settings,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurface
+            // Hide the tab row when showing a result screen to maximize image space
+            if (!showingResult) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        label = { Text("Camera") }
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FilterChip(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        label = { Text("Import") },
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
 
             when (selectedTab) {
                 0 -> CameraPermissionScreen(
                     onOpenGallery = { selectedTab = 1 },
-                    preferencesRepository = preferencesRepository
+                    preferencesRepository = preferencesRepository,
+                    onShowingResult = { showingResult = it }
                 )
-                1 -> GalleryScreen()
+                1 -> GalleryScreen(
+                    onShowingResult = { showingResult = it }
+                )
             }
         }
     }

@@ -1,10 +1,13 @@
 package com.docshot.ui
 
+import android.annotation.SuppressLint
+import android.hardware.camera2.CameraCharacteristics
 import android.os.Build
 import android.util.Log
 import android.util.Size
 import android.view.HapticFeedbackConstants
 import android.widget.Toast
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -13,6 +16,7 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import com.docshot.cv.CameraIntrinsics
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -67,14 +71,16 @@ private const val TAG = "DocShot:CameraScreen"
 @Composable
 fun CameraPermissionScreen(
     onOpenGallery: () -> Unit = {},
-    preferencesRepository: UserPreferencesRepository? = null
+    preferencesRepository: UserPreferencesRepository? = null,
+    onShowingResult: (Boolean) -> Unit = {}
 ) {
     val permissionState = rememberCameraPermissionState()
 
     when {
         permissionState.hasPermission -> CameraPreview(
             onOpenGallery = onOpenGallery,
-            preferencesRepository = preferencesRepository
+            preferencesRepository = preferencesRepository,
+            onShowingResult = onShowingResult
         )
         permissionState.permissionRequested -> CameraDeniedMessage()
     }
@@ -84,7 +90,8 @@ fun CameraPermissionScreen(
 fun CameraPreview(
     viewModel: CameraViewModel = viewModel(),
     onOpenGallery: () -> Unit = {},
-    preferencesRepository: UserPreferencesRepository? = null
+    preferencesRepository: UserPreferencesRepository? = null,
+    onShowingResult: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -94,6 +101,11 @@ fun CameraPreview(
     val autoCapEnabled by viewModel.autoCapEnabled.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+
+    // Notify parent when showing/hiding result screen
+    LaunchedEffect(cameraState) {
+        onShowingResult(cameraState is CameraUiState.Result)
+    }
 
     // Provide context to ViewModel for auto-capture
     LaunchedEffect(context) {
@@ -153,7 +165,8 @@ fun CameraPreview(
             onShare = { viewModel.shareResult(context) },
             onRetake = { viewModel.resetToCamera() },
             onAdjust = { viewModel.adjustFromResult() },
-            onRotate = { viewModel.rotateResult() }
+            onRotate = { viewModel.rotateResult() },
+            onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) }
         )
         return
     }
@@ -417,6 +430,7 @@ private fun bindCamera(
             )
             viewModel.camera = camera
             camera.cameraControl.enableTorch(viewModel.flashEnabled.value)
+            extractCameraIntrinsics(camera, viewModel)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to bind 3 use cases, retrying without ImageCapture", e)
             cameraProvider.unbindAll()
@@ -429,8 +443,71 @@ private fun bindCamera(
             viewModel.camera = camera
             camera.cameraControl.enableTorch(viewModel.flashEnabled.value)
             viewModel.imageCapture = null
+            extractCameraIntrinsics(camera, viewModel)
         }
     }, ContextCompat.getMainExecutor(context))
+}
+
+/**
+ * Extracts camera intrinsics for homography-based aspect ratio verification.
+ * Tries LENS_INTRINSIC_CALIBRATION first (API 28+, LEVEL_3 devices),
+ * falls back to computing from sensor physical size + focal length.
+ */
+@SuppressLint("RestrictedApi")
+private fun extractCameraIntrinsics(
+    camera: androidx.camera.core.Camera,
+    viewModel: CameraViewModel
+) {
+    try {
+        val camera2Info = Camera2CameraInfo.from(camera.cameraInfo)
+        val chars = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+
+        if (chars != null && chars.size >= 4) {
+            // LENS_INTRINSIC_CALIBRATION: [fx, fy, cx, cy, s]
+            val intrinsics = CameraIntrinsics(
+                fx = chars[0].toDouble(),
+                fy = chars[1].toDouble(),
+                cx = chars[2].toDouble(),
+                cy = chars[3].toDouble()
+            )
+            viewModel.setCameraIntrinsics(intrinsics)
+            Log.d(TAG, "Camera intrinsics from LENS_INTRINSIC_CALIBRATION: fx=%.1f fy=%.1f".format(
+                intrinsics.fx, intrinsics.fy))
+            return
+        }
+
+        // Fallback: compute from focal length + sensor size + pixel array
+        val focalLengths = camera2Info.getCameraCharacteristic(
+            CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+        )
+        val sensorSize = camera2Info.getCameraCharacteristic(
+            CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE
+        )
+        val pixelArray = camera2Info.getCameraCharacteristic(
+            CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE
+        )
+
+        if (focalLengths != null && focalLengths.isNotEmpty() && sensorSize != null && pixelArray != null) {
+            val focalLength = focalLengths[0].toDouble()
+            val sensorWidth = sensorSize.width.toDouble()
+            val sensorHeight = sensorSize.height.toDouble()
+            val pixelW = pixelArray.width.toDouble()
+            val pixelH = pixelArray.height.toDouble()
+
+            val fx = focalLength * pixelW / sensorWidth
+            val fy = focalLength * pixelH / sensorHeight
+            val cx = pixelW / 2.0
+            val cy = pixelH / 2.0
+
+            val intrinsics = CameraIntrinsics(fx = fx, fy = fy, cx = cx, cy = cy)
+            viewModel.setCameraIntrinsics(intrinsics)
+            Log.d(TAG, "Camera intrinsics from sensor size: fx=%.1f fy=%.1f".format(fx, fy))
+        } else {
+            Log.d(TAG, "Could not extract camera intrinsics — aspect ratio estimation will use distance-only snapping")
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Failed to extract camera intrinsics: ${e.message}")
+    }
 }
 
 /**

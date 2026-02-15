@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,27 +13,33 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.BottomAppBar
+import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,10 +53,17 @@ import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import com.docshot.cv.KNOWN_FORMATS
 import com.docshot.cv.PostProcessFilter
 import com.docshot.cv.applyFilter
+import com.docshot.cv.estimateAspectRatio
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+
+/** Snap threshold for format label reactivity (matches AspectRatioEstimator). */
+private const val FORMAT_SNAP_THRESHOLD = 0.06f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,15 +73,51 @@ fun ResultScreen(
     onShare: () -> Unit,
     onRetake: () -> Unit,
     onAdjust: () -> Unit = {},
-    onRotate: () -> Unit = {}
+    onRotate: () -> Unit = {},
+    onAspectRatioChange: (Double) -> Unit = {}
 ) {
     var showRectified by rememberSaveable { mutableStateOf(true) }
     var selectedFilter by rememberSaveable { mutableStateOf(PostProcessFilter.NONE.name) }
     var processedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
 
-    // Apply filter off the main thread whenever the selection changes
-    LaunchedEffect(selectedFilter, showRectified) {
+    // Aspect ratio estimation (runs once per corner set)
+    val estimate = remember(data.corners, data.cameraIntrinsics) {
+        if (data.corners.size == 4) estimateAspectRatio(data.corners, data.cameraIntrinsics) else null
+    }
+
+    // Raw ratio from current rectified bitmap (fallback when no estimation)
+    val bitmapRatio = remember(data.rectifiedBitmap) {
+        val w = data.rectifiedBitmap.width.toFloat()
+        val h = data.rectifiedBitmap.height.toFloat()
+        minOf(w, h) / maxOf(w, h)
+    }
+
+    var currentRatio by rememberSaveable {
+        mutableFloatStateOf(estimate?.estimatedRatio?.toFloat() ?: bitmapRatio)
+    }
+
+    // Reactive format label: updates as slider moves
+    val currentFormatLabel = remember(currentRatio) {
+        KNOWN_FORMATS
+            .filter { abs(currentRatio - it.ratio.toFloat()) <= FORMAT_SNAP_THRESHOLD }
+            .minByOrNull { abs(currentRatio - it.ratio.toFloat()) }
+            ?.name ?: "Custom"
+    }
+
+    // Format dropdown state
+    var showFormatMenu by remember { mutableStateOf(false) }
+
+    // Debounced re-warp when slider changes
+    var pendingRatio by remember { mutableStateOf<Float?>(null) }
+    LaunchedEffect(pendingRatio) {
+        val ratio = pendingRatio ?: return@LaunchedEffect
+        delay(300) // debounce
+        onAspectRatioChange(ratio.toDouble())
+    }
+
+    // Apply filter off the main thread whenever the selection or bitmap changes
+    LaunchedEffect(selectedFilter, showRectified, data.rectifiedBitmap) {
         if (!showRectified || selectedFilter == PostProcessFilter.NONE.name) {
             processedBitmap?.recycle()
             processedBitmap = null
@@ -92,221 +143,244 @@ fun ResultScreen(
         }
     }
 
-    // Reset filter when data changes (e.g., after rotation)
-    var previousDataId by remember { mutableStateOf(System.identityHashCode(data.rectifiedBitmap)) }
-    LaunchedEffect(data.rectifiedBitmap) {
-        val currentId = System.identityHashCode(data.rectifiedBitmap)
-        if (currentId != previousDataId) {
-            selectedFilter = PostProcessFilter.NONE.name
-            previousDataId = currentId
-        }
-    }
-
     val hasCorners = data.normalizedCorners.size == 8
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Document Captured") },
-                navigationIcon = {
-                    IconButton(onClick = onRetake) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Top bar
+        TopAppBar(
+            title = { Text("Result") },
+            navigationIcon = {
+                IconButton(onClick = onRetake) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Retake"
+                    )
+                }
+            },
+            actions = {
+                IconButton(onClick = onRotate) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.RotateRight,
+                        contentDescription = "Rotate"
+                    )
+                }
+                if (hasCorners) {
+                    IconButton(onClick = onAdjust) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Retake"
+                            imageVector = Icons.Filled.Tune,
+                            contentDescription = "Adjust corners"
                         )
                     }
                 }
-            )
-        },
-        bottomBar = {
-            BottomAppBar {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    OutlinedButton(
-                        onClick = onShare,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Share")
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Button(
-                        onClick = onSave,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        // TODO: Wire save/share to use processedBitmap when filter is active
-                        //  (requires ViewModel changes in integration phase)
-                        Text("Save")
-                    }
-                }
             }
-        }
-    ) { innerPadding ->
-        Column(
+        )
+
+        // Combined view toggle + filter chips in one scrollable row
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Original / Rectified toggle
+            FilterChip(
+                selected = !showRectified,
+                onClick = { showRectified = false },
+                label = { Text("Original") }
+            )
+            FilterChip(
+                selected = showRectified && selectedFilter == PostProcessFilter.NONE.name,
+                onClick = {
+                    showRectified = true
+                    selectedFilter = PostProcessFilter.NONE.name
+                },
+                label = { Text("Rectified") }
+            )
+            FilterChip(
+                selected = showRectified && selectedFilter == PostProcessFilter.BLACK_WHITE.name,
+                onClick = {
+                    showRectified = true
+                    selectedFilter = PostProcessFilter.BLACK_WHITE.name
+                },
+                label = { Text("B&W") }
+            )
+            FilterChip(
+                selected = showRectified && selectedFilter == PostProcessFilter.CONTRAST.name,
+                onClick = {
+                    showRectified = true
+                    selectedFilter = PostProcessFilter.CONTRAST.name
+                },
+                label = { Text("Contrast") }
+            )
+            FilterChip(
+                selected = showRectified && selectedFilter == PostProcessFilter.COLOR_CORRECT.name,
+                onClick = {
+                    showRectified = true
+                    selectedFilter = PostProcessFilter.COLOR_CORRECT.name
+                },
+                label = { Text("Even Light") }
+            )
+        }
+
+        // Aspect ratio: clickable format label (dropdown) + slider
+        AnimatedVisibility(visible = showRectified && data.corners.isNotEmpty()) {
             Row(
-                modifier = Modifier.padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = !showRectified,
-                    onClick = { showRectified = false },
-                    label = { Text("Original") }
-                )
-                FilterChip(
-                    selected = showRectified,
-                    onClick = { showRectified = true },
-                    label = { Text("Rectified") }
-                )
-            }
-
-            // Post-processing filter chips — only visible when viewing rectified image
-            AnimatedVisibility(visible = showRectified) {
-                Row(
-                    modifier = Modifier.padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedFilter == PostProcessFilter.NONE.name,
-                        onClick = { selectedFilter = PostProcessFilter.NONE.name },
-                        label = { Text("None") }
-                    )
-                    FilterChip(
-                        selected = selectedFilter == PostProcessFilter.BLACK_WHITE.name,
-                        onClick = { selectedFilter = PostProcessFilter.BLACK_WHITE.name },
-                        label = { Text("B&W") }
-                    )
-                    FilterChip(
-                        selected = selectedFilter == PostProcessFilter.CONTRAST.name,
-                        onClick = { selectedFilter = PostProcessFilter.CONTRAST.name },
-                        label = { Text("Contrast") }
-                    )
-                    FilterChip(
-                        selected = selectedFilter == PostProcessFilter.COLOR_CORRECT.name,
-                        onClick = { selectedFilter = PostProcessFilter.COLOR_CORRECT.name },
-                        label = { Text("Even Light") }
-                    )
-                }
-            }
-
-            // Image display with optional processing spinner
-            val displayBitmap = when {
-                !showRectified -> data.originalBitmap
-                processedBitmap != null -> processedBitmap!!
-                else -> data.rectifiedBitmap
-            }
-
-            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Image(
-                    bitmap = displayBitmap.asImageBitmap(),
-                    contentDescription = when {
-                        !showRectified -> "Original photo"
-                        selectedFilter != PostProcessFilter.NONE.name -> "Filtered document"
-                        else -> "Rectified document"
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
+                // Clickable format label with dropdown
+                Box {
+                    Row(
+                        modifier = Modifier.clickable { showFormatMenu = true },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = currentFormatLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Icon(
+                            imageVector = Icons.Filled.ArrowDropDown,
+                            contentDescription = "Select format",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showFormatMenu,
+                        onDismissRequest = { showFormatMenu = false }
+                    ) {
+                        KNOWN_FORMATS.forEach { format ->
+                            DropdownMenuItem(
+                                text = { Text(format.name) },
+                                onClick = {
+                                    currentRatio = format.ratio.toFloat()
+                                    pendingRatio = currentRatio
+                                    showFormatMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Slider fills remaining space
+                Slider(
+                    value = currentRatio,
+                    onValueChange = { currentRatio = it },
+                    onValueChangeFinished = { pendingRatio = currentRatio },
+                    valueRange = 0.25f..1.0f,
+                    modifier = Modifier.weight(1f)
                 )
-
-                // Quad overlay on the original image showing detected document borders
-                if (!showRectified && hasCorners) {
-                    val imgW = data.originalBitmap.width.toFloat()
-                    val imgH = data.originalBitmap.height.toFloat()
-                    val nc = data.normalizedCorners
-
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val transform = computeFitTransform(
-                            containerWidth = size.width,
-                            containerHeight = size.height,
-                            imageWidth = imgW,
-                            imageHeight = imgH
-                        )
-
-                        fun mapCorner(index: Int): androidx.compose.ui.geometry.Offset {
-                            val px = nc[index * 2] * imgW
-                            val py = nc[index * 2 + 1] * imgH
-                            return androidx.compose.ui.geometry.Offset(
-                                x = px * transform.scale + transform.offsetX,
-                                y = py * transform.scale + transform.offsetY
-                            )
-                        }
-
-                        val path = Path().apply {
-                            val p0 = mapCorner(0)
-                            moveTo(p0.x, p0.y)
-                            for (i in 1..3) {
-                                val p = mapCorner(i)
-                                lineTo(p.x, p.y)
-                            }
-                            close()
-                        }
-
-                        // Green fill with 15% alpha
-                        drawPath(
-                            path = path,
-                            color = Color.Green.copy(alpha = 0.15f),
-                            style = Fill
-                        )
-                        // Green stroke
-                        drawPath(
-                            path = path,
-                            color = Color.Green,
-                            style = Stroke(width = 3.dp.toPx())
-                        )
-                        // Corner dots
-                        for (i in 0..3) {
-                            drawCircle(
-                                color = Color.Green,
-                                radius = 6.dp.toPx(),
-                                center = mapCorner(i)
-                            )
-                        }
-                    }
-                }
-
-                if (isProcessing) {
-                    CircularProgressIndicator()
-                }
             }
+        }
 
-            // Adjust and Rotate buttons
-            Row(
-                modifier = Modifier.padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (hasCorners) {
-                    OutlinedButton(onClick = onAdjust) {
-                        Text("Adjust")
-                    }
-                }
-                OutlinedButton(onClick = onRotate) {
-                    Text("Rotate")
-                }
-            }
+        // Image display with optional processing spinner
+        val displayBitmap = when {
+            !showRectified -> data.originalBitmap
+            processedBitmap != null -> processedBitmap!!
+            else -> data.rectifiedBitmap
+        }
 
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Pipeline: %.0f ms".format(data.pipelineMs),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                bitmap = displayBitmap.asImageBitmap(),
+                contentDescription = when {
+                    !showRectified -> "Original photo"
+                    selectedFilter != PostProcessFilter.NONE.name -> "Filtered document"
+                    else -> "Rectified document"
+                },
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // Quad overlay on the original image showing detected document borders
+            if (!showRectified && hasCorners) {
+                val imgW = data.originalBitmap.width.toFloat()
+                val imgH = data.originalBitmap.height.toFloat()
+                val nc = data.normalizedCorners
+
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val transform = computeFitTransform(
+                        containerWidth = size.width,
+                        containerHeight = size.height,
+                        imageWidth = imgW,
+                        imageHeight = imgH
+                    )
+
+                    fun mapCorner(index: Int): androidx.compose.ui.geometry.Offset {
+                        val px = nc[index * 2] * imgW
+                        val py = nc[index * 2 + 1] * imgH
+                        return androidx.compose.ui.geometry.Offset(
+                            x = px * transform.scale + transform.offsetX,
+                            y = py * transform.scale + transform.offsetY
+                        )
+                    }
+
+                    val path = Path().apply {
+                        val p0 = mapCorner(0)
+                        moveTo(p0.x, p0.y)
+                        for (i in 1..3) {
+                            val p = mapCorner(i)
+                            lineTo(p.x, p.y)
+                        }
+                        close()
+                    }
+
+                    drawPath(
+                        path = path,
+                        color = Color.Green.copy(alpha = 0.15f),
+                        style = Fill
+                    )
+                    drawPath(
+                        path = path,
+                        color = Color.Green,
+                        style = Stroke(width = 3.dp.toPx())
+                    )
+                    for (i in 0..3) {
+                        drawCircle(
+                            color = Color.Green,
+                            radius = 6.dp.toPx(),
+                            center = mapCorner(i)
+                        )
+                    }
+                }
+            }
+
+            if (isProcessing) {
+                CircularProgressIndicator()
+            }
+        }
+
+        // Slim bottom action row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            OutlinedButton(
+                onClick = onShare,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Share")
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Button(
+                onClick = onSave,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Save")
+            }
         }
     }
 }

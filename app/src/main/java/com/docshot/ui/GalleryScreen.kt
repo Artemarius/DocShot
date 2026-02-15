@@ -24,6 +24,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -37,9 +38,17 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.docshot.R
 
 @Composable
-fun GalleryScreen(viewModel: GalleryViewModel = viewModel()) {
+fun GalleryScreen(
+    viewModel: GalleryViewModel = viewModel(),
+    onShowingResult: (Boolean) -> Unit = {}
+) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+
+    // Notify parent when showing/hiding result screen
+    LaunchedEffect(state) {
+        onShowingResult(state is GalleryUiState.Result)
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -138,7 +147,8 @@ fun GalleryScreen(viewModel: GalleryViewModel = viewModel()) {
                     }
                 },
                 onShare = { viewModel.shareResult(context) },
-                onRetake = { viewModel.reset() }
+                onRetake = { viewModel.reset() },
+                onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) }
             )
         }
 

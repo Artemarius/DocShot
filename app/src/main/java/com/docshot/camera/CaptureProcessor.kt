@@ -6,6 +6,7 @@ import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.util.Log
 import androidx.camera.core.ImageProxy
+import com.docshot.cv.DocumentOrientation
 import com.docshot.cv.detectAndCorrect
 import com.docshot.cv.detectDocument
 import com.docshot.cv.orderCorners
@@ -34,7 +35,8 @@ data class CaptureResult(
     val rectifiedBitmap: Bitmap,
     val pipelineMs: Double,
     val confidence: Double = 0.0,
-    val corners: List<org.opencv.core.Point> = emptyList()
+    val corners: List<org.opencv.core.Point> = emptyList(),
+    val autoRotationSteps: Int = 0  // 0-3: from detectAndCorrect (CORRECT=0, ROTATE_90=1, etc.)
 )
 
 /**
@@ -212,12 +214,20 @@ fun processCapture(
         Log.d(TAG, "processCapture: %.1f ms total, confidence: %.2f".format(
             ms, detectionConfidence))
 
+        val autoSteps = when (orientation) {
+            DocumentOrientation.CORRECT -> 0
+            DocumentOrientation.ROTATE_90 -> 1
+            DocumentOrientation.ROTATE_180 -> 2
+            DocumentOrientation.ROTATE_270 -> 3
+        }
+
         return CaptureResult(
             originalBitmap = originalBitmap,
             rectifiedBitmap = rectifiedBitmap,
             pipelineMs = ms,
             confidence = detectionConfidence,
-            corners = refinedCorners
+            corners = refinedCorners,
+            autoRotationSteps = autoSteps
         )
     } catch (e: Exception) {
         throw RuntimeException("Capture failed at $stage: ${e.message}", e)
