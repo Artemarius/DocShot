@@ -193,7 +193,7 @@ fun ResultScreen(
                     FilterChip(
                         selected = selectedFilter == PostProcessFilter.COLOR_CORRECT.name,
                         onClick = { selectedFilter = PostProcessFilter.COLOR_CORRECT.name },
-                        label = { Text("Color Fix") }
+                        label = { Text("Even Light") }
                     )
                 }
             }

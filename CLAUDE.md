@@ -55,17 +55,10 @@ app/src/main/java/com/docshot/
 ```
 
 ## Phase Boundaries
-- **Phase 1-8:** Classical CV pipeline, fully complete
-- **Phase 9:** Flash support
-- **Phase 10:** Google Play release
-- **Future:** Lighting gradient correction (replace Color Fix filter — see below)
-
-### Future: Lighting Gradient Correction
-Replace the current Color Fix filter (gray-world white balance, minimal visible effect) with intelligent brightness gradient correction for angled document shots. Approaches to evaluate:
-- **Planar lighting model:** Use the detected quad's 3D plane (recoverable from the homography) to estimate a linear or bilinear brightness gradient across the document surface, then divide it out before other processing.
-- **Local adaptive correction:** Fit a low-frequency surface (e.g., bilateral filter on downscaled grayscale, or polynomial surface fit) to the background brightness, then normalize the document to uniform illumination.
-- **Quad-aware bilateral:** Use the quad geometry to inform the filter kernel — larger smoothing along the gradient direction, preserving text edges.
-The goal: correct the smooth brightness falloff typical when a flat document is lit from one side or photographed at an angle (one edge noticeably darker than the opposite).
+- **Phase 1-9:** Classical CV pipeline + flash/capture UX, fully complete
+- **Phase 10:** Lighting gradient correction — complete ("Even Light" filter)
+- **Phase 11:** Capture UX & tracking quality — capture freeze fix, aspect ratio slider, AF lock, gradient-based quad tracking
+- **Phase 12:** Google Play release
 
 ## Performance Budget
 - Detection per frame: < 30ms (for real-time preview overlay)
@@ -111,3 +104,4 @@ The goal: correct the smooth brightness falloff typical when a flat document is 
 - Phase 7 complete: robustness & edge case handling. Group A: per-detection confidence scoring (60% quad score + 20% area ratio + 20% edge density), edge-density validation via QuadValidator, suppression threshold at 0.35. Group B: low-confidence fallback to manual corner adjustment (0.35–0.65), "Point at a document" hint, auto-capture gated to high-confidence (>=0.65), multi-candidate score-margin penalty. Group C: multi-strategy preprocessing (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) with scene analysis and 25ms budget, small document support (2% min area, aspect-ratio scoring), partial document detection with "Move back" hint. Group D: expanded test coverage — 21 instrumented regression tests (SyntheticImageFactory with 7 corner presets + 10 image generators), 17 QuadScoringTest unit tests. All Phase 7 roadmap items complete. Total: 32 unit tests + 21 instrumented tests = 53 tests.
 - Phase 8 complete: performance optimization. Group A: ABI splits (arm64/armv7) + R8 minification + resource shrinking — arm64 release APK 26MB (down from 59MB). Group B: MatPool utility for detection hot path, cached structuring kernels in EdgeDetector, shared grayscale conversion between analyzeScene and preprocessing. Group C: adaptive frame skipping (skip every other frame after 5 consecutive misses, 2-of-3 after 15 misses), scene analysis caching across 10 frames. Group D: reduced intermediate Mats in PostProcessor (RGBA→gray direct, single convertTo for clip+clamp), try/finally exception safety in detectWithStrategy. Total: 35 unit tests + 21 instrumented tests = 56 tests.
 - Phase 9 complete: flash support + capture quality/UX fixes. Flash toggle (torch mode via CameraX, persisted in DataStore settings, auto-off after capture). Capture pipeline reworked: always re-detects on capture frame, validates against preview corners (orderCorners fixes rotation-induced ordering), prefers preview corners when re-detection deviates >5% (routes to adjustment), trusts max(preview, redetect) confidence when quads agree. OrientationDetector: ambiguous vertical text defaults to CORRECT instead of ROTATE_90. QuadSmoother: stableThreshold 8→10, average corner drift instead of max (one jittery corner no longer blocks stability). Split confidence thresholds: auto-capture fires at ≥0.65, result routing at ≥0.65 (matched — if trusted enough to auto-capture, trusted enough to show result). ResultScreen: quad overlay on original view, Adjust/Rotate buttons, filter reset on data change. CameraScreen: freeze overlay (dark scrim + frozen quad + status text) during Capturing/Processing instead of continuing live preview. Preferences wired through to CameraScreen for flash persistence.
+- Phase 10 complete: lighting gradient correction — replaced gray-world white balance ("Color Fix") with low-frequency illumination estimation ("Even Light"). Algorithm: LAB color space → downsample L by 8x → heavy Gaussian blur (51x51) → upsample → divide original L by estimated illumination → rescale to original mean. Corrects brightness gradients from angled lighting while preserving color (A/B untouched). Bugfixes: cornerSubPix bounds clamping (preview corners at image edge caused assertion failure), full-frame quad rejection in ContourFinder (quad spanning all 4 edges is the image border, not a document). 4 new instrumented tests + 1 new unit test. Total: 36 unit tests + 25 instrumented tests = 61 tests.

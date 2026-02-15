@@ -201,7 +201,7 @@ fun SettingsScreen(
                             "NONE" to "None",
                             "BLACK_WHITE" to "B&W",
                             "CONTRAST" to "Contrast",
-                            "COLOR_CORRECT" to "Color Fix"
+                            "COLOR_CORRECT" to "Even Light"
                         )
                         filters.forEach { (key, label) ->
                             FilterChip(

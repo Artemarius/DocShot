@@ -58,6 +58,19 @@ class ContourAnalysisTest {
     }
 
     @Test
+    fun `contour touching all 4 edges returns 4`() {
+        // Full-frame quad — corners near all 4 image edges
+        val points = listOf(
+            Point(2.0, 3.0),       // near top + left
+            Point(796.0, 2.0),     // near top + right
+            Point(797.0, 597.0),   // near bottom + right
+            Point(3.0, 596.0)      // near bottom + left
+        )
+        val edgeCount = touchesFrameEdges(points, imageSize)
+        assertEquals("Full-frame quad should touch 4 edges", 4, edgeCount)
+    }
+
+    @Test
     fun `contour not near any edge returns 0`() {
         val points = listOf(
             Point(100.0, 100.0),

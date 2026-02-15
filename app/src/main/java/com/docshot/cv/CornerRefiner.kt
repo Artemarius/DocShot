@@ -23,14 +23,24 @@ fun refineCorners(gray: Mat, corners: List<Point>): List<Point> {
     require(corners.size == 4) { "Expected 4 corners, got ${corners.size}" }
     val start = System.nanoTime()
 
-    val cornersMat = MatOfPoint2f(*corners.toTypedArray())
+    val winSize = 5.0
+    // Clamp corners to be within the image bounds so cornerSubPix doesn't assert.
+    // Corners from normalized preview coordinates can land exactly on the edge
+    // (e.g., x=width) which is outside valid pixel range [0, width-1].
+    val maxX = gray.cols() - 1 - winSize
+    val maxY = gray.rows() - 1 - winSize
+    val clamped = corners.map { pt ->
+        Point(pt.x.coerceIn(winSize, maxX), pt.y.coerceIn(winSize, maxY))
+    }
+
+    val cornersMat = MatOfPoint2f(*clamped.toTypedArray())
 
     // 11x11 search window (winSize=5 means 2*5+1=11)
     // 30 iterations or 0.01 pixel accuracy, whichever comes first
     Imgproc.cornerSubPix(
         gray,
         cornersMat,
-        Size(5.0, 5.0),
+        Size(winSize, winSize),
         Size(-1.0, -1.0),
         TermCriteria(
             TermCriteria.COUNT + TermCriteria.EPS,
