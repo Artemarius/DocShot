@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="docshot_dark_teal">#FF003738</color>
+    <color name="docshot_teal_container">#FF004F50</color>
+</resources>

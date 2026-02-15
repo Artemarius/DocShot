@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Document body: white trapezoid (narrower top, wider bottom = perspective) -->
+    <!-- Safe zone is 18-90 on each axis (72x72 center) -->
+    <path
+        android:pathData="M36,28 L68,28 L72,80 L32,80 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Corner fold triangle (top-right) -->
+    <path
+        android:pathData="M60,28 L68,28 L68,36 Z"
+        android:fillColor="#B2EBF2" />
+
+    <!-- Fold crease line -->
+    <path
+        android:pathData="M60,28 L68,36"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="0.5" />
+
+    <!-- Scan-line accent (cyan horizontal line across document) -->
+    <path
+        android:pathData="M35,54 L69,54"
+        android:strokeColor="#4DD0E1"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round" />
+
+    <!-- Faint text-suggestion lines -->
+    <path
+        android:pathData="M37,40 L57,40"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="1"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M37,45 L62,45"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="1"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M37,50 L55,50"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="1"
+        android:strokeLineCap="round" />
+
+    <!-- More text lines below scan line -->
+    <path
+        android:pathData="M36,60 L64,60"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="1"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M36,65 L60,65"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="1"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M35,70 L66,70"
+        android:strokeColor="#80DEEA"
+        android:strokeWidth="1"
+        android:strokeLineCap="round" />
+</vector>
