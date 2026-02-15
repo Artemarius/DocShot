@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.FilterBAndW
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -93,6 +94,14 @@ fun SettingsScreen(
                 description = "Vibrate on capture",
                 checked = settings.hapticFeedback,
                 onCheckedChange = { scope.launch { preferencesRepository.setHapticFeedback(it) } }
+            )
+
+            SettingsToggleItem(
+                icon = Icons.Filled.FlashOn,
+                title = "Flash",
+                description = "Enable camera torch for low-light scanning",
+                checked = settings.flashEnabled,
+                onCheckedChange = { scope.launch { preferencesRepository.setFlashEnabled(it) } }
             )
 
             SettingsToggleItem(

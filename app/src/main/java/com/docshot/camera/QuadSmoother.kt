@@ -21,7 +21,7 @@ private const val TAG = "DocShot:QuadSmoother"
 class QuadSmoother(
     private val windowSize: Int = 5,
     private val missThreshold: Int = 10,
-    private val stableThreshold: Int = 15,
+    private val stableThreshold: Int = 10,
     private val maxCornerDriftFraction: Double = 0.02
 ) {
     private val buffer = ArrayDeque<List<Point>>()
@@ -109,16 +109,17 @@ class QuadSmoother(
             return
         }
 
-        // Max corner movement (Euclidean distance) across all 4 corners
-        var maxDrift = 0.0
+        // Average corner movement (Euclidean distance) across all 4 corners.
+        // Using average instead of max prevents one wobbly corner from
+        // resetting the entire stability streak.
+        var sumDrift = 0.0
         for (i in 0 until 4) {
             val dx = current[i].x - prev[i].x
             val dy = current[i].y - prev[i].y
-            val dist = sqrt(dx * dx + dy * dy)
-            if (dist > maxDrift) maxDrift = dist
+            sumDrift += sqrt(dx * dx + dy * dy)
         }
 
-        val driftFraction = maxDrift / diagonal
+        val driftFraction = (sumDrift / 4.0) / diagonal
 
         if (driftFraction < maxCornerDriftFraction) {
             consecutiveStable++

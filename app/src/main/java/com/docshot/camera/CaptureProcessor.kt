@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.camera.core.ImageProxy
 import com.docshot.cv.detectAndCorrect
 import com.docshot.cv.detectDocument
+import com.docshot.cv.orderCorners
 import com.docshot.cv.rectify
 import com.docshot.cv.refineCorners
 import com.docshot.util.bitmapToMat
@@ -16,9 +17,13 @@ import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
+import kotlin.math.sqrt
 
 private const val TAG = "DocShot:Capture"
 private const val MAX_DETECTION_WIDTH = 1000
+// Max allowed average corner drift (as fraction of image diagonal) between
+// re-detected and preview quads before preferring preview corners.
+private const val MAX_REDETECT_DRIFT = 0.05
 
 /**
  * Result of a full-resolution capture pipeline.
@@ -44,7 +49,11 @@ data class CaptureResult(
  *
  * @return [CaptureResult] with original and rectified bitmaps, or null if no document found.
  */
-fun processCapture(imageProxy: ImageProxy): CaptureResult? {
+fun processCapture(
+    imageProxy: ImageProxy,
+    previewCorners: List<FloatArray>? = null,
+    previewConfidence: Double = 0.0
+): CaptureResult? {
     val start = System.nanoTime()
     var bgrMat: Mat? = null
     var rotatedMat: Mat? = null
@@ -82,8 +91,29 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
         }
         Log.d(TAG, "Rotated: %dx%d".format(rotatedMat.cols(), rotatedMat.rows()))
 
-        // Detect document — downscale for detection since kernels are tuned for ~640px
+        // Re-detect on the captured image, then validate against preview corners.
+        // Analysis (640x480) and capture (4032x3024) frames may have different FOV/crop,
+        // so re-detection can find a different (often worse) quad. When preview corners
+        // are available, use them as a sanity check: if the re-detected quad deviates
+        // significantly, prefer the preview corners.
         stage = "detection"
+        val fullResCorners: List<org.opencv.core.Point>
+        val detectionConfidence: Double
+
+        val w = rotatedMat.cols().toDouble()
+        val h = rotatedMat.rows().toDouble()
+
+        // Map preview corners to full-res pixel coordinates (if available).
+        // Preview corners are normalized in display orientation (rotation already applied
+        // by FrameAnalyzer.rotateAndNormalize), so corner ordering is scrambled — reorder
+        // to TL, TR, BR, BL so rectify() and cornerDrift() work correctly.
+        val previewFullRes = previewCorners?.let { pcs ->
+            orderCorners(pcs.map { pt ->
+                org.opencv.core.Point(pt[0].toDouble() * w, pt[1].toDouble() * h)
+            })
+        }
+
+        // Downscale for detection since kernels are tuned for ~640px
         val detectionMat: Mat
         val scaleFactor: Double
         if (rotatedMat.cols() > MAX_DETECTION_WIDTH) {
@@ -100,16 +130,54 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
         val detection = detectDocument(detectionMat)
         if (detectionMat !== rotatedMat) detectionMat.release()
 
-        if (detection == null) {
-            Log.d(TAG, "processCapture: no document found")
+        if (detection != null) {
+            val redetectedCorners = detection.corners.map { pt ->
+                org.opencv.core.Point(pt.x * scaleFactor, pt.y * scaleFactor)
+            }
+
+            if (previewFullRes != null) {
+                // Compare re-detected quad with preview quad. If the average corner
+                // deviation exceeds 5% of the image diagonal, the re-detection likely
+                // found a different (wrong) contour — prefer the preview corners.
+                val diagonal = sqrt(w * w + h * h)
+                val avgDrift = cornerDrift(redetectedCorners, previewFullRes)
+                val driftPct = avgDrift / diagonal
+
+                if (driftPct > MAX_REDETECT_DRIFT) {
+                    // Re-detection found a significantly different quad — prefer preview
+                    // corners but with low confidence so the user can verify/adjust.
+                    fullResCorners = previewFullRes
+                    detectionConfidence = 0.55
+                    Log.d(TAG, "Re-detection deviated %.1f%% from preview (>%.0f%%), using preview corners (low confidence)".format(
+                        driftPct * 100, MAX_REDETECT_DRIFT * 100))
+                } else {
+                    // Re-detection agrees with preview — use re-detected corners (more
+                    // accurate on the actual frame) but trust the higher of re-detected
+                    // vs preview confidence. Preview confidence is a multi-frame rolling
+                    // average validated by the stability tracker, so it's often more
+                    // reliable than a single-frame capture score.
+                    fullResCorners = redetectedCorners
+                    detectionConfidence = maxOf(detection.confidence, previewConfidence)
+                    Log.d(TAG, "Re-detection agrees with preview (drift=%.1f%%), confidence=%.2f (redetect=%.2f, preview=%.2f)".format(
+                        driftPct * 100, detectionConfidence, detection.confidence, previewConfidence))
+                }
+            } else {
+                // No preview corners to compare — use re-detection as-is
+                fullResCorners = redetectedCorners
+                detectionConfidence = detection.confidence
+                Log.d(TAG, "Re-detection succeeded (no preview), confidence=%.2f".format(detectionConfidence))
+            }
+        } else if (previewFullRes != null) {
+            // Re-detection failed entirely — fall back to preview corners.
+            // Set confidence below threshold so it routes to LowConfidence for manual adjustment.
+            fullResCorners = previewFullRes
+            detectionConfidence = 0.5
+            Log.d(TAG, "Re-detection failed, falling back to preview corners (confidence=0.5)")
+        } else {
+            Log.d(TAG, "processCapture: no document found, no preview fallback")
             rotatedMat.release()
             rotatedMat = null
             return null
-        }
-
-        // Scale corners back to full image coordinates
-        val fullResCorners = detection.corners.map { pt ->
-            org.opencv.core.Point(pt.x * scaleFactor, pt.y * scaleFactor)
         }
 
         // Sub-pixel corner refinement on grayscale
@@ -142,13 +210,13 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
 
         val ms = (System.nanoTime() - start) / 1_000_000.0
         Log.d(TAG, "processCapture: %.1f ms total, confidence: %.2f".format(
-            ms, detection.confidence))
+            ms, detectionConfidence))
 
         return CaptureResult(
             originalBitmap = originalBitmap,
             rectifiedBitmap = rectifiedBitmap,
             pipelineMs = ms,
-            confidence = detection.confidence,
+            confidence = detectionConfidence,
             corners = refinedCorners
         )
     } catch (e: Exception) {
@@ -290,4 +358,21 @@ private fun rotateMat(mat: Mat, rotationDegrees: Int): Mat {
             copy
         }
     }
+}
+
+/**
+ * Computes the average Euclidean distance between corresponding corners
+ * of two 4-point quads (in pixel coordinates).
+ */
+private fun cornerDrift(
+    a: List<org.opencv.core.Point>,
+    b: List<org.opencv.core.Point>
+): Double {
+    var sum = 0.0
+    for (i in 0 until 4) {
+        val dx = a[i].x - b[i].x
+        val dy = a[i].y - b[i].y
+        sum += sqrt(dx * dx + dy * dy)
+    }
+    return sum / 4.0
 }

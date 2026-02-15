@@ -22,7 +22,8 @@ data class DocShotSettings(
     val outputFormat: String = "JPEG",
     val defaultFilter: String = "NONE",
     val showDebugOverlay: Boolean = false,
-    val hapticFeedback: Boolean = true
+    val hapticFeedback: Boolean = true,
+    val flashEnabled: Boolean = false
 )
 
 /**
@@ -40,6 +41,7 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_DEFAULT_FILTER = stringPreferencesKey("default_filter")
         val KEY_SHOW_DEBUG_OVERLAY = booleanPreferencesKey("show_debug_overlay")
         val KEY_HAPTIC_FEEDBACK = booleanPreferencesKey("haptic_feedback")
+        val KEY_FLASH_ENABLED = booleanPreferencesKey("flash_enabled")
     }
 
     /**
@@ -53,7 +55,8 @@ class UserPreferencesRepository(private val context: Context) {
             outputFormat = prefs[KEY_OUTPUT_FORMAT] ?: "JPEG",
             defaultFilter = prefs[KEY_DEFAULT_FILTER] ?: "NONE",
             showDebugOverlay = prefs[KEY_SHOW_DEBUG_OVERLAY] ?: false,
-            hapticFeedback = prefs[KEY_HAPTIC_FEEDBACK] ?: true
+            hapticFeedback = prefs[KEY_HAPTIC_FEEDBACK] ?: true,
+            flashEnabled = prefs[KEY_FLASH_ENABLED] ?: false
         )
     }
 
@@ -84,5 +87,9 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setHapticFeedback(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[KEY_HAPTIC_FEEDBACK] = enabled }
+    }
+
+    suspend fun setFlashEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[KEY_FLASH_ENABLED] = enabled }
     }
 }

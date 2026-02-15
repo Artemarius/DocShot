@@ -144,10 +144,9 @@ fun detectOrientation(rectifiedMat: Mat): DocumentOrientation {
                 Log.d(TAG, "Vertical text, right-heavy -> ROTATE_270")
                 DocumentOrientation.ROTATE_270
             } else {
-                // Ambiguous sideways — default to 90 CW since that matches
-                // the most common "phone held sideways" scenario
-                Log.d(TAG, "Vertical text, ambiguous -> ROTATE_90")
-                DocumentOrientation.ROTATE_90
+                // Ambiguous sideways — default to CORRECT to avoid incorrect rotation
+                Log.d(TAG, "Vertical text, ambiguous -> CORRECT")
+                DocumentOrientation.CORRECT
             }
         }
         else -> {

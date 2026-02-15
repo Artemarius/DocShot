@@ -23,11 +23,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
@@ -53,18 +56,26 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.docshot.R
+import com.docshot.util.UserPreferencesRepository
 import com.docshot.util.rememberCameraPermissionState
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 private const val TAG = "DocShot:CameraScreen"
 
 @Composable
-fun CameraPermissionScreen(onOpenGallery: () -> Unit = {}) {
+fun CameraPermissionScreen(
+    onOpenGallery: () -> Unit = {},
+    preferencesRepository: UserPreferencesRepository? = null
+) {
     val permissionState = rememberCameraPermissionState()
 
     when {
-        permissionState.hasPermission -> CameraPreview(onOpenGallery = onOpenGallery)
+        permissionState.hasPermission -> CameraPreview(
+            onOpenGallery = onOpenGallery,
+            preferencesRepository = preferencesRepository
+        )
         permissionState.permissionRequested -> CameraDeniedMessage()
     }
 }
@@ -72,7 +83,8 @@ fun CameraPermissionScreen(onOpenGallery: () -> Unit = {}) {
 @Composable
 fun CameraPreview(
     viewModel: CameraViewModel = viewModel(),
-    onOpenGallery: () -> Unit = {}
+    onOpenGallery: () -> Unit = {},
+    preferencesRepository: UserPreferencesRepository? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -80,11 +92,20 @@ fun CameraPreview(
     val detectionState by viewModel.detectionState.collectAsState()
     val cameraState by viewModel.cameraState.collectAsState()
     val autoCapEnabled by viewModel.autoCapEnabled.collectAsState()
+    val flashEnabled by viewModel.flashEnabled.collectAsState()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
 
     // Provide context to ViewModel for auto-capture
     LaunchedEffect(context) {
         viewModel.setContext(context)
+    }
+
+    // Sync persisted flash setting into ViewModel on first composition
+    LaunchedEffect(preferencesRepository) {
+        if (preferencesRepository != null) {
+            val settings = preferencesRepository.settings.first()
+            viewModel.setFlashFromSettings(settings.flashEnabled)
+        }
     }
 
     // Collect haptic events and perform haptic feedback
@@ -130,12 +151,17 @@ fun CameraPreview(
                 }
             },
             onShare = { viewModel.shareResult(context) },
-            onRetake = { viewModel.resetToCamera() }
+            onRetake = { viewModel.resetToCamera() },
+            onAdjust = { viewModel.adjustFromResult() },
+            onRotate = { viewModel.rotateResult() }
         )
         return
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        val isIdle = cameraState is CameraUiState.Idle
+        val isBusy = cameraState is CameraUiState.Capturing || cameraState is CameraUiState.Processing
+
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
@@ -150,11 +176,60 @@ fun CameraPreview(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Quad overlay with stability visual feedback
-        QuadOverlay(
-            detectionState = detectionState,
-            modifier = Modifier.fillMaxSize()
-        )
+        // Quad overlay with stability visual feedback (live detection)
+        if (!isBusy) {
+            QuadOverlay(
+                detectionState = detectionState,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // Freeze overlay: dark scrim + last quad when capturing/processing.
+        // Prevents ambiguity between live preview and the captured frame.
+        if (isBusy) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+            )
+            // Show the frozen quad from the last detection state
+            QuadOverlay(
+                detectionState = detectionState,
+                modifier = Modifier.fillMaxSize()
+            )
+            Text(
+                text = if (cameraState is CameraUiState.Processing)
+                    (cameraState as CameraUiState.Processing).message
+                else "Capturing...",
+                color = Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(bottom = 64.dp)
+            )
+        }
+
+        // Flash toggle button (top-right)
+        IconButton(
+            onClick = { viewModel.toggleFlash() },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 16.dp, end = 16.dp)
+                .size(40.dp)
+                .background(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    shape = CircleShape
+                )
+        ) {
+            Icon(
+                imageVector = if (flashEnabled) Icons.Filled.FlashOn
+                    else Icons.Filled.FlashOff,
+                contentDescription = if (flashEnabled) "Turn off flash"
+                    else "Turn on flash",
+                modifier = Modifier.size(22.dp),
+                tint = if (flashEnabled) Color(0xFFFFC107) else Color.White
+            )
+        }
 
         // Debug: detection latency
         if (detectionState.normalizedCorners != null) {
@@ -191,9 +266,6 @@ fun CameraPreview(
         }
 
         // Capture FAB
-        val isIdle = cameraState is CameraUiState.Idle
-        val isBusy = cameraState is CameraUiState.Capturing || cameraState is CameraUiState.Processing
-
         FloatingActionButton(
             onClick = {
                 if (isIdle) viewModel.captureDocument(context)
@@ -313,22 +385,26 @@ private fun bindCamera(
 
         cameraProvider.unbindAll()
         try {
-            cameraProvider.bindToLifecycle(
+            val camera = cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 CameraSelector.DEFAULT_BACK_CAMERA,
                 preview,
                 imageAnalysis,
                 imageCapture
             )
+            viewModel.camera = camera
+            camera.cameraControl.enableTorch(viewModel.flashEnabled.value)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to bind 3 use cases, retrying without ImageCapture", e)
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
+            val camera = cameraProvider.bindToLifecycle(
                 lifecycleOwner,
                 CameraSelector.DEFAULT_BACK_CAMERA,
                 preview,
                 imageAnalysis
             )
+            viewModel.camera = camera
+            camera.cameraControl.enableTorch(viewModel.flashEnabled.value)
             viewModel.imageCapture = null
         }
     }, ContextCompat.getMainExecutor(context))

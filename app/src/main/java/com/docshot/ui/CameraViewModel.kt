@@ -3,6 +3,7 @@ package com.docshot.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.camera.core.Camera
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -34,7 +35,12 @@ import java.util.Date
 import java.util.Locale
 
 private const val TAG = "DocShot:ViewModel"
-private const val LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.65
+// Minimum confidence for auto-capture to fire (stability + this threshold)
+private const val AUTO_CAPTURE_CONFIDENCE_THRESHOLD = 0.65
+// Minimum confidence to route directly to Result; below this goes to corner adjustment.
+// Matches AUTO_CAPTURE_CONFIDENCE_THRESHOLD — if we trust it enough to auto-capture,
+// we trust it enough to show the result (user can still hit Adjust).
+private const val RESULT_CONFIDENCE_THRESHOLD = 0.65
 
 /**
  * UI state for the detected document overlay.
@@ -45,6 +51,7 @@ data class DetectionUiState(
     val sourceWidth: Int = 0,
     val sourceHeight: Int = 0,
     val detectionMs: Double = 0.0,
+    val confidence: Double = 0.0,
     val isStable: Boolean = false,
     val stabilityProgress: Float = 0f,
     val isPartialDocument: Boolean = false
@@ -68,7 +75,9 @@ data class CaptureResultData(
     val originalBitmap: Bitmap,
     val rectifiedBitmap: Bitmap,
     val pipelineMs: Double,
-    val confidence: Double = 0.0
+    val confidence: Double = 0.0,
+    val corners: List<org.opencv.core.Point> = emptyList(),
+    val normalizedCorners: FloatArray = floatArrayOf()
 )
 
 class CameraViewModel : ViewModel() {
@@ -83,6 +92,10 @@ class CameraViewModel : ViewModel() {
     private val _autoCapEnabled = MutableStateFlow(true)
     val autoCapEnabled: StateFlow<Boolean> = _autoCapEnabled
 
+    /** Whether the camera torch is enabled. */
+    private val _flashEnabled = MutableStateFlow(false)
+    val flashEnabled: StateFlow<Boolean> = _flashEnabled
+
     /** Emitted when capture triggers (auto or manual) so CameraScreen can fire haptic. */
     private val _hapticEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val hapticEvent: SharedFlow<Unit> = _hapticEvent
@@ -92,6 +105,9 @@ class CameraViewModel : ViewModel() {
 
     /** Set by CameraScreen when binding the camera. */
     var imageCapture: ImageCapture? = null
+
+    /** Set by CameraScreen after bindToLifecycle returns the Camera object. */
+    var camera: Camera? = null
 
     /**
      * Store a context reference for auto-capture. Must be called from CameraScreen
@@ -107,12 +123,25 @@ class CameraViewModel : ViewModel() {
         Log.d(TAG, "Auto-capture toggled: ${_autoCapEnabled.value}")
     }
 
+    fun toggleFlash() {
+        _flashEnabled.value = !_flashEnabled.value
+        camera?.cameraControl?.enableTorch(_flashEnabled.value)
+        Log.d(TAG, "Flash toggled: ${_flashEnabled.value}")
+    }
+
+    /** Initialize flash state from persisted settings (called once on composition). */
+    fun setFlashFromSettings(enabled: Boolean) {
+        _flashEnabled.value = enabled
+        camera?.cameraControl?.enableTorch(enabled)
+    }
+
     val frameAnalyzer = FrameAnalyzer { result ->
         _detectionState.value = DetectionUiState(
             normalizedCorners = result.normalizedCorners,
             sourceWidth = result.sourceWidth,
             sourceHeight = result.sourceHeight,
             detectionMs = result.detectionMs,
+            confidence = result.confidence,
             isStable = result.isStable,
             stabilityProgress = result.stabilityProgress,
             isPartialDocument = result.isPartialDocument
@@ -120,7 +149,7 @@ class CameraViewModel : ViewModel() {
 
         // Auto-capture: trigger when stable, high confidence, enabled, and idle
         if (result.isStable
-            && result.confidence >= LOW_CONFIDENCE_FALLBACK_THRESHOLD
+            && result.confidence >= AUTO_CAPTURE_CONFIDENCE_THRESHOLD
             && _autoCapEnabled.value
             && _cameraState.value is CameraUiState.Idle
         ) {
@@ -142,8 +171,19 @@ class CameraViewModel : ViewModel() {
         }
         if (_cameraState.value !is CameraUiState.Idle) return
 
+        // Snapshot preview state before capture
+        val previewCorners = _detectionState.value.normalizedCorners
+        val previewConfidence = _detectionState.value.confidence
+
         _cameraState.value = CameraUiState.Capturing
         _hapticEvent.tryEmit(Unit)
+
+        // Turn off flash immediately after shutter to save battery
+        if (_flashEnabled.value) {
+            camera?.cameraControl?.enableTorch(false)
+            _flashEnabled.value = false
+            Log.d(TAG, "Flash disabled after capture")
+        }
 
         capture.takePicture(
             ContextCompat.getMainExecutor(context),
@@ -152,19 +192,26 @@ class CameraViewModel : ViewModel() {
                     viewModelScope.launch(Dispatchers.Default) {
                         _cameraState.value = CameraUiState.Processing("Processing document...")
                         try {
-                            val result = processCapture(imageProxy)
+                            val result = processCapture(imageProxy, previewCorners, previewConfidence)
                             imageProxy.close()
 
                             if (result != null) {
-                                if (result.confidence >= LOW_CONFIDENCE_FALLBACK_THRESHOLD) {
+                                if (result.confidence >= RESULT_CONFIDENCE_THRESHOLD) {
                                     Log.d(TAG, "High confidence (%.2f) — routing to Result".format(
                                         result.confidence))
+                                    val normCorners = cornersToNormalized(
+                                        result.corners,
+                                        result.originalBitmap.width,
+                                        result.originalBitmap.height
+                                    )
                                     _cameraState.value = CameraUiState.Result(
                                         CaptureResultData(
                                             originalBitmap = result.originalBitmap,
                                             rectifiedBitmap = result.rectifiedBitmap,
                                             pipelineMs = result.pipelineMs,
-                                            confidence = result.confidence
+                                            confidence = result.confidence,
+                                            corners = result.corners,
+                                            normalizedCorners = normCorners
                                         )
                                     )
                                 } else {
@@ -285,12 +332,19 @@ class CameraViewModel : ViewModel() {
                 val pipelineMs = (System.nanoTime() - start) / 1_000_000.0
                 Log.d(TAG, "acceptLowConfidenceCorners: %.1f ms".format(pipelineMs))
 
+                val normCorners = cornersToNormalized(
+                    adjustedCorners,
+                    originalBitmap.width,
+                    originalBitmap.height
+                )
                 _cameraState.value = CameraUiState.Result(
                     CaptureResultData(
                         originalBitmap = originalBitmap,
                         rectifiedBitmap = rectifiedBitmap,
                         pipelineMs = pipelineMs,
-                        confidence = confidence
+                        confidence = confidence,
+                        corners = adjustedCorners,
+                        normalizedCorners = normCorners
                     )
                 )
             } catch (e: Exception) {
@@ -303,6 +357,51 @@ class CameraViewModel : ViewModel() {
                 rectifiedMat?.release()
             }
         }
+    }
+
+    /**
+     * Transitions from Result to LowConfidence (corner adjustment) so the user
+     * can manually adjust corners on the original image.
+     */
+    fun adjustFromResult() {
+        val state = _cameraState.value
+        check(state is CameraUiState.Result) {
+            "adjustFromResult called in wrong state: ${state::class.simpleName}"
+        }
+        val data = state.data
+        if (data.corners.isEmpty()) return
+
+        // Recycle the rectified bitmap; user will re-rectify after adjustment
+        data.rectifiedBitmap.recycle()
+
+        _cameraState.value = CameraUiState.LowConfidence(
+            originalBitmap = data.originalBitmap,
+            corners = data.corners,
+            confidence = data.confidence
+        )
+    }
+
+    /**
+     * Rotates the rectified bitmap 90 degrees clockwise and emits an updated Result.
+     * Corners are unchanged since they reference the original image.
+     */
+    fun rotateResult() {
+        val state = _cameraState.value
+        check(state is CameraUiState.Result) {
+            "rotateResult called in wrong state: ${state::class.simpleName}"
+        }
+        val data = state.data
+        val oldBitmap = data.rectifiedBitmap
+
+        val matrix = android.graphics.Matrix().apply { postRotate(90f) }
+        val rotated = Bitmap.createBitmap(
+            oldBitmap, 0, 0, oldBitmap.width, oldBitmap.height, matrix, true
+        )
+        if (rotated !== oldBitmap) oldBitmap.recycle()
+
+        _cameraState.value = CameraUiState.Result(
+            data.copy(rectifiedBitmap = rotated)
+        )
     }
 
     /** Cancels the low-confidence adjustment flow and returns to camera preview. */
@@ -320,6 +419,24 @@ class CameraViewModel : ViewModel() {
             if (_cameraState.value is CameraUiState.Error) {
                 _cameraState.value = CameraUiState.Idle
             }
+        }
+    }
+
+    /**
+     * Converts full-res pixel corners to a flat FloatArray of 8 normalized [0,1] values.
+     * Layout: [x0, y0, x1, y1, x2, y2, x3, y3]
+     */
+    private fun cornersToNormalized(
+        corners: List<org.opencv.core.Point>,
+        imageWidth: Int,
+        imageHeight: Int
+    ): FloatArray {
+        if (corners.size != 4 || imageWidth <= 0 || imageHeight <= 0) return floatArrayOf()
+        val w = imageWidth.toFloat()
+        val h = imageHeight.toFloat()
+        return FloatArray(8) { i ->
+            val corner = corners[i / 2]
+            if (i % 2 == 0) (corner.x / w).toFloat() else (corner.y / h).toFloat()
         }
     }
 

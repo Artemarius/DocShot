@@ -2,6 +2,7 @@ package com.docshot.ui
 
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.docshot.cv.PostProcessFilter
@@ -51,7 +56,9 @@ fun ResultScreen(
     data: CaptureResultData,
     onSave: () -> Unit,
     onShare: () -> Unit,
-    onRetake: () -> Unit
+    onRetake: () -> Unit,
+    onAdjust: () -> Unit = {},
+    onRotate: () -> Unit = {}
 ) {
     var showRectified by rememberSaveable { mutableStateOf(true) }
     var selectedFilter by rememberSaveable { mutableStateOf(PostProcessFilter.NONE.name) }
@@ -84,6 +91,18 @@ fun ResultScreen(
             processedBitmap = null
         }
     }
+
+    // Reset filter when data changes (e.g., after rotation)
+    var previousDataId by remember { mutableStateOf(System.identityHashCode(data.rectifiedBitmap)) }
+    LaunchedEffect(data.rectifiedBitmap) {
+        val currentId = System.identityHashCode(data.rectifiedBitmap)
+        if (currentId != previousDataId) {
+            selectedFilter = PostProcessFilter.NONE.name
+            previousDataId = currentId
+        }
+    }
+
+    val hasCorners = data.normalizedCorners.size == 8
 
     Scaffold(
         topBar = {
@@ -203,12 +222,83 @@ fun ResultScreen(
                     contentScale = ContentScale.Fit
                 )
 
+                // Quad overlay on the original image showing detected document borders
+                if (!showRectified && hasCorners) {
+                    val imgW = data.originalBitmap.width.toFloat()
+                    val imgH = data.originalBitmap.height.toFloat()
+                    val nc = data.normalizedCorners
+
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val transform = computeFitTransform(
+                            containerWidth = size.width,
+                            containerHeight = size.height,
+                            imageWidth = imgW,
+                            imageHeight = imgH
+                        )
+
+                        fun mapCorner(index: Int): androidx.compose.ui.geometry.Offset {
+                            val px = nc[index * 2] * imgW
+                            val py = nc[index * 2 + 1] * imgH
+                            return androidx.compose.ui.geometry.Offset(
+                                x = px * transform.scale + transform.offsetX,
+                                y = py * transform.scale + transform.offsetY
+                            )
+                        }
+
+                        val path = Path().apply {
+                            val p0 = mapCorner(0)
+                            moveTo(p0.x, p0.y)
+                            for (i in 1..3) {
+                                val p = mapCorner(i)
+                                lineTo(p.x, p.y)
+                            }
+                            close()
+                        }
+
+                        // Green fill with 15% alpha
+                        drawPath(
+                            path = path,
+                            color = Color.Green.copy(alpha = 0.15f),
+                            style = Fill
+                        )
+                        // Green stroke
+                        drawPath(
+                            path = path,
+                            color = Color.Green,
+                            style = Stroke(width = 3.dp.toPx())
+                        )
+                        // Corner dots
+                        for (i in 0..3) {
+                            drawCircle(
+                                color = Color.Green,
+                                radius = 6.dp.toPx(),
+                                center = mapCorner(i)
+                            )
+                        }
+                    }
+                }
+
                 if (isProcessing) {
                     CircularProgressIndicator()
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // Adjust and Rotate buttons
+            Row(
+                modifier = Modifier.padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (hasCorners) {
+                    OutlinedButton(onClick = onAdjust) {
+                        Text("Adjust")
+                    }
+                }
+                OutlinedButton(onClick = onRotate) {
+                    Text("Rotate")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
 
             Text(
                 text = "Pipeline: %.0f ms".format(data.pipelineMs),

@@ -96,7 +96,10 @@ private fun MainContent() {
             }
 
             when (selectedTab) {
-                0 -> CameraPermissionScreen(onOpenGallery = { selectedTab = 1 })
+                0 -> CameraPermissionScreen(
+                    onOpenGallery = { selectedTab = 1 },
+                    preferencesRepository = preferencesRepository
+                )
                 1 -> GalleryScreen()
             }
         }
