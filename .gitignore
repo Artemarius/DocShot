@@ -26,8 +26,14 @@ obj/
 # OpenCV
 /OpenCV-android-sdk/
 
+# Release signing
+keystore.properties
+*.jks
+*.keystore
+
 # Private planning docs
 PROJECT.md
+STORE_LISTING.md
 
 # OS
 .DS_Store
