@@ -25,6 +25,7 @@ class QuadSmoother(
     private val maxCornerDriftFraction: Double = 0.02
 ) {
     private val buffer = ArrayDeque<List<Point>>()
+    private val confidenceBuffer = ArrayDeque<Double>()
     private var consecutiveMisses = 0
     private var consecutiveStable = 0
     private var previousSmoothed: List<Point>? = null
@@ -37,25 +38,39 @@ class QuadSmoother(
     var stabilityProgress: Float = 0f
         private set
 
+    /** Rolling average of recent detection confidence values. */
+    val averageConfidence: Double
+        get() = if (confidenceBuffer.isEmpty()) 0.0
+                else confidenceBuffer.sum() / confidenceBuffer.size
+
     /**
      * Feed a new detection result. Pass null when no document was detected.
      * Returns smoothed corners or null if detection has been lost.
+     *
+     * @param corners detected corner positions, or null if no detection this frame.
+     * @param confidence detection confidence for this frame (ignored on miss).
      */
-    fun update(corners: List<Point>?): List<Point>? {
+    fun update(corners: List<Point>?, confidence: Double = 0.0): List<Point>? {
         if (corners == null) {
             consecutiveMisses++
             resetStability()
             if (consecutiveMisses >= missThreshold) {
                 buffer.clear()
+                confidenceBuffer.clear()
                 previousSmoothed = null
                 return null
             }
+            // On miss, don't add to confidence buffer — keep existing values
             return if (buffer.isNotEmpty()) average() else null
         }
 
         consecutiveMisses = 0
         if (buffer.size >= windowSize) buffer.removeFirst()
         buffer.addLast(corners)
+
+        // Track confidence in a parallel rolling buffer (same window as corners)
+        if (confidenceBuffer.size >= windowSize) confidenceBuffer.removeFirst()
+        confidenceBuffer.addLast(confidence)
 
         val smoothed = average()
         updateStability(smoothed)
@@ -65,6 +80,7 @@ class QuadSmoother(
 
     fun clear() {
         buffer.clear()
+        confidenceBuffer.clear()
         consecutiveMisses = 0
         previousSmoothed = null
         resetStability()

@@ -8,6 +8,9 @@ import org.opencv.imgproc.Imgproc
 
 private const val TAG = "DocShot:Detector"
 
+/** Minimum confidence to accept a detection. Below this, detectDocument() returns null. */
+const val MIN_CONFIDENCE_THRESHOLD = 0.35
+
 /**
  * Result of document detection (corners only, no rectification).
  * @param corners Detected corner positions [TL, TR, BR, BL] in source image coordinates.
@@ -15,7 +18,8 @@ private const val TAG = "DocShot:Detector"
  */
 data class DocumentCorners(
     val corners: List<Point>,
-    val detectionMs: Double
+    val detectionMs: Double,
+    val confidence: Double = 0.0
 )
 
 /**
@@ -27,7 +31,8 @@ data class DocumentCorners(
 data class DetectionResult(
     val rectified: Mat,
     val corners: List<Point>,
-    val pipelineMs: Double
+    val pipelineMs: Double,
+    val confidence: Double = 0.0
 )
 
 /**
@@ -39,8 +44,10 @@ data class DetectionResult(
  * 2. Canny edge detection (auto-threshold)
  * 3. Contour finding + polygon approximation
  * 4. Quadrilateral scoring and ranking
+ * 5. Edge density validation + confidence scoring
  *
- * All intermediate Mats are released.
+ * All intermediate Mats are released. Detections with confidence below
+ * [MIN_CONFIDENCE_THRESHOLD] are suppressed (returns null).
  *
  * @param input BGR, RGBA, or grayscale image (not modified).
  */
@@ -55,9 +62,11 @@ fun detectDocument(input: Mat): DocumentCorners? {
     gray.release()
 
     val quads = findQuadrilaterals(edges, imageSize)
-    edges.release()
+    // NOTE: edges Mat is kept alive until after confidence computation
+    // so QuadValidator can measure edge support along the detected quad.
 
     if (quads.isEmpty()) {
+        edges.release()
         val ms = (System.nanoTime() - start) / 1_000_000.0
         Log.d(TAG, "detectDocument: %.1f ms — no quads found".format(ms))
         return null
@@ -65,14 +74,48 @@ fun detectDocument(input: Mat): DocumentCorners? {
 
     val corners = bestQuad(quads, imageArea)
     if (corners == null) {
+        edges.release()
         val ms = (System.nanoTime() - start) / 1_000_000.0
         Log.d(TAG, "detectDocument: %.1f ms — no valid quad after scoring".format(ms))
         return null
     }
 
+    // Measure how well the detected quad aligns with actual Canny edge pixels.
+    // Both `edges` and `corners` are at the same resolution (input image size,
+    // no internal downscaling in this function), so coordinates match directly.
+    val edgeDensity = QuadValidator.edgeDensityScore(edges, corners)
+    edges.release()
+    Log.d(TAG, "Edge density: %.2f".format(edgeDensity))
+
+    // Confidence = weighted combination of three complementary signals:
+    //   1. Quad score (60%) — geometric quality: area coverage + angle regularity.
+    //      Highest weight because a well-shaped, large quad is the strongest
+    //      indicator of a real document.
+    //   2. Area ratio (20%) — quad area relative to image area. Penalizes tiny
+    //      detections that are likely noise or distant objects.
+    //   3. Edge density (20%) — fraction of the quad perimeter supported by
+    //      Canny edge pixels. Validates that the quad boundary corresponds to
+    //      real image edges, not an artifact of contour approximation.
+    val quadScore = scoreQuad(corners, imageArea)
+    val areaRatio = (quadArea(corners) / imageArea).coerceIn(0.0, 1.0)
+    val confidence = 0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity
+
+    // Suppress low-confidence detections to reduce false positives.
+    // Threshold of 0.35 is slightly permissive — will be tuned with the
+    // Phase 7 Group G test dataset.
+    if (confidence < MIN_CONFIDENCE_THRESHOLD) {
+        val ms = (System.nanoTime() - start) / 1_000_000.0
+        Log.d(TAG, "Detection suppressed: confidence %.2f < %.2f threshold".format(confidence, MIN_CONFIDENCE_THRESHOLD))
+        return null
+    }
+
     val ms = (System.nanoTime() - start) / 1_000_000.0
-    Log.d(TAG, "detectDocument: %.1f ms".format(ms))
-    return DocumentCorners(corners, ms)
+    Log.d(TAG, "detectDocument: %.1f ms, confidence: %.2f".format(ms, confidence))
+    return DocumentCorners(
+        corners = corners,
+        detectionMs = ms,
+        confidence = confidence
+    )
 }
 
 /**
@@ -100,6 +143,7 @@ fun detectAndRectify(
     return DetectionResult(
         rectified = rectified,
         corners = detection.corners,
-        pipelineMs = ms
+        pipelineMs = ms,
+        confidence = detection.confidence
     )
 }

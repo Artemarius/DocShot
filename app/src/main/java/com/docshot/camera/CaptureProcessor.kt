@@ -27,7 +27,8 @@ private const val MAX_DETECTION_WIDTH = 1000
 data class CaptureResult(
     val originalBitmap: Bitmap,
     val rectifiedBitmap: Bitmap,
-    val pipelineMs: Double
+    val pipelineMs: Double,
+    val confidence: Double = 0.0
 )
 
 /**
@@ -139,12 +140,14 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
         val rectifiedBitmap = matToBitmap(rectifiedMat)
 
         val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "processCapture: %.1f ms total".format(ms))
+        Log.d(TAG, "processCapture: %.1f ms total, confidence: %.2f".format(
+            ms, detection.confidence))
 
         return CaptureResult(
             originalBitmap = originalBitmap,
             rectifiedBitmap = rectifiedBitmap,
-            pipelineMs = ms
+            pipelineMs = ms,
+            confidence = detection.confidence
         )
     } catch (e: Exception) {
         throw RuntimeException("Capture failed at $stage: ${e.message}", e)

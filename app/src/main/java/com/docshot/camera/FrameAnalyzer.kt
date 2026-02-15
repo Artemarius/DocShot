@@ -49,8 +49,11 @@ class FrameAnalyzer(
                 Point(pt.x * scaleFactor, pt.y * scaleFactor)
             }
 
-            // Temporal smoothing
-            val smoothed = smoother.update(rawCorners)
+            // Temporal smoothing (pass confidence for rolling average tracking)
+            val smoothed = smoother.update(
+                corners = rawCorners,
+                confidence = detection?.confidence ?: 0.0
+            )
 
             // Rotate corners for display orientation and normalize to [0,1]
             val rotation = imageProxy.imageInfo.rotationDegrees
@@ -80,7 +83,8 @@ class FrameAnalyzer(
                 detectionMs = detection?.detectionMs ?: 0.0,
                 totalMs = totalMs,
                 isStable = smoother.isStable,
-                stabilityProgress = smoother.stabilityProgress
+                stabilityProgress = smoother.stabilityProgress,
+                confidence = smoother.averageConfidence
             ))
         } finally {
             imageProxy.close()
@@ -170,5 +174,6 @@ data class FrameDetectionResult(
     val detectionMs: Double,
     val totalMs: Double,
     val isStable: Boolean = false,
-    val stabilityProgress: Float = 0f
+    val stabilityProgress: Float = 0f,
+    val confidence: Double = 0.0
 )

@@ -57,6 +57,23 @@ fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
 }
 
 /**
+ * Scores a single quadrilateral using the same weighted combination as [bestQuad]:
+ * area (normalized to image area) and angle regularity.
+ * Returns a value in [0.0, 1.0] where higher is better.
+ *
+ * @param quad 4-point polygon (any winding order).
+ * @param imageArea total image area used for normalization.
+ */
+fun scoreQuad(quad: List<Point>, imageArea: Double): Double {
+    require(quad.size == 4) { "Expected 4 points, got ${quad.size}" }
+    require(imageArea > 0.0) { "imageArea must be positive" }
+
+    val areaScore = (quadArea(quad) / imageArea).coerceIn(0.0, 1.0)
+    val angleScore = angleRegularityScore(quad)
+    return WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore
+}
+
+/**
  * Computes the area of a quadrilateral using the shoelace formula.
  */
 internal fun quadArea(points: List<Point>): Double {
