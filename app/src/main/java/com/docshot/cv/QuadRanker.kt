@@ -15,18 +15,42 @@ private const val WEIGHT_AREA = 0.5
 private const val WEIGHT_ANGLE = 0.5
 
 /**
- * Picks the best quadrilateral from a list of candidates.
+ * Result of quadrilateral ranking with scoring metadata.
+ * @param quad Ordered corners [TL, TR, BR, BL], or null if no valid quad.
+ * @param score Best candidate's score [0.0, 1.0].
+ * @param candidateCount Number of valid (convex) candidates considered.
+ * @param scoreMargin Difference between best and second-best scores.
+ *   1.0 when only one candidate exists (unambiguous).
+ *   Lower values indicate ambiguity between multiple similar candidates.
+ */
+data class QuadRankResult(
+    val quad: List<Point>?,
+    val score: Double,
+    val candidateCount: Int,
+    val scoreMargin: Double
+)
+
+/**
+ * Ranks all candidate quadrilaterals and returns the best one with scoring metadata.
  * Scoring uses a weighted combination of:
  * - Area (largest preferred, normalized to image area)
  * - Angle regularity (corners close to 90° preferred)
  * Non-convex quads are rejected outright.
- * Returns ordered corners [TL, TR, BR, BL] or null if no valid quad found.
+ *
+ * The [scoreMargin] in the result indicates how clearly the best candidate
+ * dominates. A low margin means multiple quads scored similarly — ambiguous.
+ * A margin of 1.0 means only one valid candidate existed (unambiguous).
+ *
+ * @param candidates List of 4-point polygons to evaluate.
+ * @param imageArea Total image area for normalization.
  */
-fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
+fun rankQuads(candidates: List<List<Point>>, imageArea: Double): QuadRankResult {
     val start = System.nanoTime()
 
     var bestScore = -1.0
+    var secondBestScore = -1.0
     var bestQuad: List<Point>? = null
+    var convexCount = 0
 
     for (quad in candidates) {
         // Reject non-convex quadrilaterals
@@ -37,6 +61,8 @@ fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
         mat.release()
         if (!convex) continue
 
+        convexCount++
+
         val area = quadArea(quad)
         val areaScore = (area / imageArea).coerceIn(0.0, 1.0)
 
@@ -45,15 +71,45 @@ fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
 
         val score = WEIGHT_AREA * areaScore + WEIGHT_ANGLE * angleScore
         if (score > bestScore) {
+            secondBestScore = bestScore
             bestScore = score
             bestQuad = quad
+        } else if (score > secondBestScore) {
+            secondBestScore = score
         }
     }
 
-    val ms = (System.nanoTime() - start) / 1_000_000.0
-    Log.d(TAG, "bestQuad: %.1f ms (candidates=%d, bestScore=%.3f)".format(ms, candidates.size, bestScore))
+    // Score margin: how clearly the best candidate stands out.
+    // 1.0 = sole candidate (unambiguous), 0.0 = tied with runner-up.
+    val scoreMargin = when {
+        convexCount == 0 -> 0.0
+        convexCount == 1 -> 1.0
+        bestScore <= 0.0 -> 0.0
+        else -> ((bestScore - secondBestScore) / bestScore).coerceIn(0.0, 1.0)
+    }
 
-    return bestQuad?.let { orderCorners(it) }
+    val ms = (System.nanoTime() - start) / 1_000_000.0
+    Log.d(TAG, "rankQuads: %.1f ms (candidates=%d, convex=%d, bestScore=%.3f, margin=%.3f)".format(
+        ms, candidates.size, convexCount, bestScore, scoreMargin))
+
+    return QuadRankResult(
+        quad = bestQuad?.let { orderCorners(it) },
+        score = bestScore.coerceAtLeast(0.0),
+        candidateCount = convexCount,
+        scoreMargin = scoreMargin
+    )
+}
+
+/**
+ * Picks the best quadrilateral from a list of candidates.
+ * Scoring uses a weighted combination of:
+ * - Area (largest preferred, normalized to image area)
+ * - Angle regularity (corners close to 90° preferred)
+ * Non-convex quads are rejected outright.
+ * Returns ordered corners [TL, TR, BR, BL] or null if no valid quad found.
+ */
+fun bestQuad(candidates: List<List<Point>>, imageArea: Double): List<Point>? {
+    return rankQuads(candidates, imageArea).quad
 }
 
 /**

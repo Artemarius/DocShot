@@ -11,6 +11,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.docshot.camera.FrameAnalyzer
 import com.docshot.camera.processCapture
+import com.docshot.cv.detectAndCorrect
+import com.docshot.cv.rectify
+import com.docshot.cv.refineCorners
+import com.docshot.util.bitmapToMat
+import com.docshot.util.matToBitmap
 import com.docshot.util.saveBitmapToGallery
 import com.docshot.util.shareImage
 import kotlinx.coroutines.Dispatchers
@@ -21,12 +26,15 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.opencv.core.Mat
+import org.opencv.imgproc.Imgproc
 import java.lang.ref.WeakReference
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private const val TAG = "DocShot:ViewModel"
+private const val LOW_CONFIDENCE_FALLBACK_THRESHOLD = 0.65
 
 /**
  * UI state for the detected document overlay.
@@ -47,13 +55,19 @@ sealed class CameraUiState {
     data object Capturing : CameraUiState()
     data class Processing(val message: String) : CameraUiState()
     data class Result(val data: CaptureResultData) : CameraUiState()
+    data class LowConfidence(
+        val originalBitmap: Bitmap,
+        val corners: List<org.opencv.core.Point>,
+        val confidence: Double
+    ) : CameraUiState()
     data class Error(val message: String) : CameraUiState()
 }
 
 data class CaptureResultData(
     val originalBitmap: Bitmap,
     val rectifiedBitmap: Bitmap,
-    val pipelineMs: Double
+    val pipelineMs: Double,
+    val confidence: Double = 0.0
 )
 
 class CameraViewModel : ViewModel() {
@@ -102,8 +116,9 @@ class CameraViewModel : ViewModel() {
             stabilityProgress = result.stabilityProgress
         )
 
-        // Auto-capture: trigger when stable, enabled, and idle
+        // Auto-capture: trigger when stable, high confidence, enabled, and idle
         if (result.isStable
+            && result.confidence >= LOW_CONFIDENCE_FALLBACK_THRESHOLD
             && _autoCapEnabled.value
             && _cameraState.value is CameraUiState.Idle
         ) {
@@ -139,13 +154,28 @@ class CameraViewModel : ViewModel() {
                             imageProxy.close()
 
                             if (result != null) {
-                                _cameraState.value = CameraUiState.Result(
-                                    CaptureResultData(
-                                        originalBitmap = result.originalBitmap,
-                                        rectifiedBitmap = result.rectifiedBitmap,
-                                        pipelineMs = result.pipelineMs
+                                if (result.confidence >= LOW_CONFIDENCE_FALLBACK_THRESHOLD) {
+                                    Log.d(TAG, "High confidence (%.2f) — routing to Result".format(
+                                        result.confidence))
+                                    _cameraState.value = CameraUiState.Result(
+                                        CaptureResultData(
+                                            originalBitmap = result.originalBitmap,
+                                            rectifiedBitmap = result.rectifiedBitmap,
+                                            pipelineMs = result.pipelineMs,
+                                            confidence = result.confidence
+                                        )
                                     )
-                                )
+                                } else {
+                                    Log.d(TAG, "Low confidence (%.2f) — routing to LowConfidence".format(
+                                        result.confidence))
+                                    // Recycle the rectified bitmap; user will re-rectify after adjustment
+                                    result.rectifiedBitmap.recycle()
+                                    _cameraState.value = CameraUiState.LowConfidence(
+                                        originalBitmap = result.originalBitmap,
+                                        corners = result.corners,
+                                        confidence = result.confidence
+                                    )
+                                }
                             } else {
                                 _cameraState.value = CameraUiState.Error("No document detected")
                                 resetAfterDelay()
@@ -191,9 +221,93 @@ class CameraViewModel : ViewModel() {
     /** Returns to camera preview and recycles bitmaps. */
     fun resetToCamera() {
         val state = _cameraState.value
-        if (state is CameraUiState.Result) {
-            state.data.originalBitmap.recycle()
-            state.data.rectifiedBitmap.recycle()
+        when (state) {
+            is CameraUiState.Result -> {
+                state.data.originalBitmap.recycle()
+                state.data.rectifiedBitmap.recycle()
+            }
+            is CameraUiState.LowConfidence -> {
+                state.originalBitmap.recycle()
+            }
+            else -> { /* no bitmaps to recycle */ }
+        }
+        _cameraState.value = CameraUiState.Idle
+    }
+
+    /**
+     * Accepts user-adjusted corners from the LowConfidence screen,
+     * re-runs corner refinement + rectification, and transitions to Result.
+     */
+    fun acceptLowConfidenceCorners(adjustedCorners: List<org.opencv.core.Point>) {
+        val state = _cameraState.value
+        check(state is CameraUiState.LowConfidence) {
+            "acceptLowConfidenceCorners called in wrong state: ${state::class.simpleName}"
+        }
+
+        val originalBitmap = state.originalBitmap
+        val confidence = state.confidence
+
+        viewModelScope.launch(Dispatchers.Default) {
+            _cameraState.value = CameraUiState.Processing("Rectifying document...")
+            val start = System.nanoTime()
+            var mat: Mat? = null
+            var grayMat: Mat? = null
+            var rectifiedMat: Mat? = null
+
+            try {
+                mat = bitmapToMat(originalBitmap)
+
+                // Sub-pixel corner refinement on grayscale
+                grayMat = Mat()
+                val colorConversion = if (mat.channels() == 4)
+                    Imgproc.COLOR_RGBA2GRAY else Imgproc.COLOR_BGR2GRAY
+                Imgproc.cvtColor(mat, grayMat, colorConversion)
+                val refinedCorners = refineCorners(grayMat, adjustedCorners)
+                grayMat.release()
+                grayMat = null
+
+                // Rectify with high-quality interpolation
+                rectifiedMat = rectify(mat, refinedCorners, Imgproc.INTER_CUBIC)
+
+                // Detect and correct document orientation
+                val (orientedMat, orientation) = detectAndCorrect(rectifiedMat)
+                if (orientedMat !== rectifiedMat) {
+                    rectifiedMat.release()
+                    rectifiedMat = orientedMat
+                }
+                Log.d(TAG, "LowConfidence orientation: ${orientation.name}")
+
+                // Convert to bitmap
+                val rectifiedBitmap = matToBitmap(rectifiedMat)
+
+                val pipelineMs = (System.nanoTime() - start) / 1_000_000.0
+                Log.d(TAG, "acceptLowConfidenceCorners: %.1f ms".format(pipelineMs))
+
+                _cameraState.value = CameraUiState.Result(
+                    CaptureResultData(
+                        originalBitmap = originalBitmap,
+                        rectifiedBitmap = rectifiedBitmap,
+                        pipelineMs = pipelineMs,
+                        confidence = confidence
+                    )
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Low-confidence rectification failed", e)
+                _cameraState.value = CameraUiState.Error("Rectification failed: ${e.message}")
+                resetAfterDelay()
+            } finally {
+                mat?.release()
+                grayMat?.release()
+                rectifiedMat?.release()
+            }
+        }
+    }
+
+    /** Cancels the low-confidence adjustment flow and returns to camera preview. */
+    fun cancelLowConfidence() {
+        val state = _cameraState.value
+        if (state is CameraUiState.LowConfidence) {
+            state.originalBitmap.recycle()
         }
         _cameraState.value = CameraUiState.Idle
     }
@@ -210,9 +324,15 @@ class CameraViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         val state = _cameraState.value
-        if (state is CameraUiState.Result) {
-            state.data.originalBitmap.recycle()
-            state.data.rectifiedBitmap.recycle()
+        when (state) {
+            is CameraUiState.Result -> {
+                state.data.originalBitmap.recycle()
+                state.data.rectifiedBitmap.recycle()
+            }
+            is CameraUiState.LowConfidence -> {
+                state.originalBitmap.recycle()
+            }
+            else -> { /* no bitmaps to recycle */ }
         }
     }
 }

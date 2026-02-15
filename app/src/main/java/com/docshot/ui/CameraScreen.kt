@@ -14,11 +14,13 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -102,6 +104,20 @@ fun CameraPreview(
         onDispose { analysisExecutor.shutdown() }
     }
 
+    // If showing low-confidence adjustment, render CornerAdjustScreen
+    if (cameraState is CameraUiState.LowConfidence) {
+        val lowConf = cameraState as CameraUiState.LowConfidence
+        CornerAdjustScreen(
+            bitmap = lowConf.originalBitmap,
+            corners = lowConf.corners,
+            onApply = { adjustedCorners ->
+                viewModel.acceptLowConfidenceCorners(adjustedCorners)
+            },
+            onCancel = { viewModel.cancelLowConfidence() }
+        )
+        return
+    }
+
     // If showing result, render ResultScreen instead of camera
     if (cameraState is CameraUiState.Result) {
         val resultData = (cameraState as CameraUiState.Result).data
@@ -149,6 +165,23 @@ fun CameraPreview(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(16.dp)
+            )
+        }
+
+        // "Point at a document" hint when no detection and camera is idle
+        if (detectionState.normalizedCorners == null && cameraState is CameraUiState.Idle) {
+            Text(
+                text = "Point at a document",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(50)
+                    )
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
             )
         }
 

@@ -72,13 +72,14 @@ fun detectDocument(input: Mat): DocumentCorners? {
         return null
     }
 
-    val corners = bestQuad(quads, imageArea)
-    if (corners == null) {
+    val rankResult = rankQuads(quads, imageArea)
+    if (rankResult.quad == null) {
         edges.release()
         val ms = (System.nanoTime() - start) / 1_000_000.0
         Log.d(TAG, "detectDocument: %.1f ms — no valid quad after scoring".format(ms))
         return null
     }
+    val corners = rankResult.quad
 
     // Measure how well the detected quad aligns with actual Canny edge pixels.
     // Both `edges` and `corners` are at the same resolution (input image size,
@@ -98,7 +99,21 @@ fun detectDocument(input: Mat): DocumentCorners? {
     //      real image edges, not an artifact of contour approximation.
     val quadScore = scoreQuad(corners, imageArea)
     val areaRatio = (quadArea(corners) / imageArea).coerceIn(0.0, 1.0)
-    val confidence = 0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity
+
+    // Score margin penalty: when multiple candidates have similar scores,
+    // reduce confidence to signal ambiguity. Only applies when there are
+    // 2+ candidates. Margin of 0.0 (identical scores) applies 0.5x penalty,
+    // margin of 1.0 (sole candidate) applies no penalty.
+    // Formula: 1.0 - 0.5 * (1.0 - scoreMargin) = 0.5 + 0.5 * scoreMargin
+    val marginFactor = if (rankResult.candidateCount >= 2) {
+        0.5 + 0.5 * rankResult.scoreMargin
+    } else {
+        1.0 // sole candidate, no ambiguity
+    }
+    val confidence = (0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity) * marginFactor
+
+    Log.d(TAG, "Candidates: %d, scoreMargin: %.2f, marginFactor: %.2f".format(
+        rankResult.candidateCount, rankResult.scoreMargin, marginFactor))
 
     // Suppress low-confidence detections to reduce false positives.
     // Threshold of 0.35 is slightly permissive — will be tuned with the

@@ -28,7 +28,8 @@ data class CaptureResult(
     val originalBitmap: Bitmap,
     val rectifiedBitmap: Bitmap,
     val pipelineMs: Double,
-    val confidence: Double = 0.0
+    val confidence: Double = 0.0,
+    val corners: List<org.opencv.core.Point> = emptyList()
 )
 
 /**
@@ -147,7 +148,8 @@ fun processCapture(imageProxy: ImageProxy): CaptureResult? {
             originalBitmap = originalBitmap,
             rectifiedBitmap = rectifiedBitmap,
             pipelineMs = ms,
-            confidence = detection.confidence
+            confidence = detection.confidence,
+            corners = refinedCorners
         )
     } catch (e: Exception) {
         throw RuntimeException("Capture failed at $stage: ${e.message}", e)
