@@ -190,7 +190,7 @@ fun CameraPreview(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.5f))
+                    .background(Color.Black.copy(alpha = 0.75f))
             )
             // Show the frozen quad from the last detection state
             QuadOverlay(
@@ -231,15 +231,33 @@ fun CameraPreview(
             )
         }
 
-        // Debug: detection latency
+        // Debug overlay: detection stats + auto-capture readiness
         if (detectionState.normalizedCorners != null) {
+            val warmupRemaining = viewModel.warmupRemainingMs()
+            val stableFrames = (detectionState.stabilityProgress * 20).toInt() // stableThreshold=20
+            val conf = detectionState.confidence
+            val autoReady = detectionState.isStable
+                    && conf >= 0.65
+                    && autoCapEnabled
+                    && warmupRemaining <= 0
             Text(
-                text = "%.0f ms".format(detectionState.detectionMs),
+                text = buildString {
+                    append("%.0f ms | ".format(detectionState.detectionMs))
+                    append("stable: $stableFrames/20 | ")
+                    append("conf: %.2f".format(conf))
+                    if (warmupRemaining > 0) append(" | warmup: ${warmupRemaining}ms")
+                    if (autoReady) append(" | READY")
+                },
                 color = Color.White,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(16.dp)
+                    .background(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(4.dp)
+                    )
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
 

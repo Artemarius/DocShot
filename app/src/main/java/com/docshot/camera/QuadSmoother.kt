@@ -6,6 +6,12 @@ import kotlin.math.sqrt
 
 private const val TAG = "DocShot:QuadSmoother"
 
+/** If a new raw detection deviates from the smoothed average by more than this
+ *  fraction of the quad diagonal, the buffer is cleared and stability resets.
+ *  Prevents the smoother from gradually blending a completely different contour
+ *  into the tracked quad and inheriting its stability progress. */
+private const val JUMP_DETECTION_FRACTION = 0.10
+
 /**
  * Temporal smoothing for detected document corners.
  * Maintains a rolling window of the last [windowSize] detections
@@ -21,8 +27,8 @@ private const val TAG = "DocShot:QuadSmoother"
 class QuadSmoother(
     private val windowSize: Int = 5,
     private val missThreshold: Int = 10,
-    private val stableThreshold: Int = 10,
-    private val maxCornerDriftFraction: Double = 0.02
+    private val stableThreshold: Int = 20,
+    private val maxCornerDriftFraction: Double = 0.025
 ) {
     private val buffer = ArrayDeque<List<Point>>()
     private val confidenceBuffer = ArrayDeque<Double>()
@@ -65,6 +71,32 @@ class QuadSmoother(
         }
 
         consecutiveMisses = 0
+
+        // Detect sudden quad jumps BEFORE smoothing absorbs them.
+        // Compare new raw corners against the current smoothed average.
+        // If the jump exceeds the threshold, clear the buffer so the
+        // smoother snaps to the new position and stability resets.
+        if (buffer.isNotEmpty()) {
+            val currentAvg = average()
+            val diagonal = estimateDiagonal(currentAvg)
+            if (diagonal > 1.0) {
+                var sumDist = 0.0
+                for (i in 0 until 4) {
+                    val dx = corners[i].x - currentAvg[i].x
+                    val dy = corners[i].y - currentAvg[i].y
+                    sumDist += sqrt(dx * dx + dy * dy)
+                }
+                val jumpFraction = (sumDist / 4.0) / diagonal
+                if (jumpFraction > JUMP_DETECTION_FRACTION) {
+                    Log.d(TAG, "Quad jump detected (%.1f%% of diagonal) — clearing buffer".format(
+                        jumpFraction * 100))
+                    buffer.clear()
+                    confidenceBuffer.clear()
+                    resetStability()
+                }
+            }
+        }
+
         if (buffer.size >= windowSize) buffer.removeFirst()
         buffer.addLast(corners)
 
@@ -123,8 +155,13 @@ class QuadSmoother(
 
         if (driftFraction < maxCornerDriftFraction) {
             consecutiveStable++
+        } else if (driftFraction < maxCornerDriftFraction * 4) {
+            // Minor wobble (2.5–10% of diagonal): likely rounded-corner jitter
+            // or slight hand movement. Halve progress instead of wiping it.
+            consecutiveStable = maxOf(1, consecutiveStable / 2)
         } else {
-            // Movement too large — reset stability counter
+            // Major jump (>10% of diagonal): a different contour was detected.
+            // Hard reset — don't let the previous quad's stability carry over.
             consecutiveStable = 1
         }
 

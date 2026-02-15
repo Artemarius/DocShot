@@ -41,6 +41,9 @@ private const val AUTO_CAPTURE_CONFIDENCE_THRESHOLD = 0.65
 // Matches AUTO_CAPTURE_CONFIDENCE_THRESHOLD — if we trust it enough to auto-capture,
 // we trust it enough to show the result (user can still hit Adjust).
 private const val RESULT_CONFIDENCE_THRESHOLD = 0.65
+// Suppress auto-capture for this many ms after entering Idle state.
+// Gives the user time to frame the document and lets detection settle.
+private const val AUTO_CAPTURE_WARMUP_MS = 1500L
 
 /**
  * UI state for the detected document overlay.
@@ -110,12 +113,25 @@ class CameraViewModel : ViewModel() {
     var camera: Camera? = null
 
     /**
+     * Timestamp (SystemClock.elapsedRealtime) when Idle state was entered.
+     * Auto-capture is suppressed for [AUTO_CAPTURE_WARMUP_MS] after this to give
+     * the user time to frame the document and let detection settle.
+     */
+    private var idleEnteredAt: Long = android.os.SystemClock.elapsedRealtime()
+
+    /**
      * Store a context reference for auto-capture. Must be called from CameraScreen
      * during composition (e.g., in a LaunchedEffect or remember block).
      * Uses a WeakReference to avoid leaking the Activity.
      */
     fun setContext(context: Context) {
         contextRef = WeakReference(context)
+    }
+
+    /** Returns ms remaining in auto-capture warmup suppression, or 0 if elapsed. */
+    fun warmupRemainingMs(): Long {
+        val elapsed = android.os.SystemClock.elapsedRealtime() - idleEnteredAt
+        return maxOf(0L, AUTO_CAPTURE_WARMUP_MS - elapsed)
     }
 
     fun toggleAutoCap() {
@@ -136,6 +152,9 @@ class CameraViewModel : ViewModel() {
     }
 
     val frameAnalyzer = FrameAnalyzer { result ->
+        // Skip detection state updates during capture/processing — freezes the quad overlay
+        if (_cameraState.value !is CameraUiState.Idle) return@FrameAnalyzer
+
         _detectionState.value = DetectionUiState(
             normalizedCorners = result.normalizedCorners,
             sourceWidth = result.sourceWidth,
@@ -147,11 +166,13 @@ class CameraViewModel : ViewModel() {
             isPartialDocument = result.isPartialDocument
         )
 
-        // Auto-capture: trigger when stable, high confidence, enabled, and idle
+        // Auto-capture: trigger when stable, high confidence, enabled, idle, and past warmup
+        val warmupElapsed = android.os.SystemClock.elapsedRealtime() - idleEnteredAt
         if (result.isStable
             && result.confidence >= AUTO_CAPTURE_CONFIDENCE_THRESHOLD
             && _autoCapEnabled.value
             && _cameraState.value is CameraUiState.Idle
+            && warmupElapsed >= AUTO_CAPTURE_WARMUP_MS
         ) {
             val ctx = contextRef?.get()
             if (ctx != null) {
@@ -280,7 +301,7 @@ class CameraViewModel : ViewModel() {
             }
             else -> { /* no bitmaps to recycle */ }
         }
-        _cameraState.value = CameraUiState.Idle
+        enterIdle()
     }
 
     /**
@@ -410,16 +431,26 @@ class CameraViewModel : ViewModel() {
         if (state is CameraUiState.LowConfidence) {
             state.originalBitmap.recycle()
         }
-        _cameraState.value = CameraUiState.Idle
+        enterIdle()
     }
 
     private suspend fun resetAfterDelay() {
         withContext(Dispatchers.Main) {
             delay(2000)
             if (_cameraState.value is CameraUiState.Error) {
-                _cameraState.value = CameraUiState.Idle
+                enterIdle()
             }
         }
+    }
+
+    /**
+     * Centralized transition to Idle: resets warmup timer and clears the smoother
+     * so stability must build from scratch (prevents instant re-fire of auto-capture).
+     */
+    private fun enterIdle() {
+        idleEnteredAt = android.os.SystemClock.elapsedRealtime()
+        frameAnalyzer.resetSmoothing()
+        _cameraState.value = CameraUiState.Idle
     }
 
     /**

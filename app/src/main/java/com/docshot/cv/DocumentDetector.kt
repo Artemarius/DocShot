@@ -211,12 +211,14 @@ private fun detectWithStrategy(
         edges.release()
         edges = null
 
-        // Confidence = weighted combination of three complementary signals:
-        //   1. Quad score (60%) — geometric quality: area coverage + angle regularity.
-        //   2. Area ratio (20%) — quad area relative to image area.
-        //   3. Edge density (20%) — fraction of the quad perimeter supported by edge pixels.
+        // Confidence = weighted combination of two complementary signals:
+        //   1. Quad score (60%) — geometric quality: area + angle regularity + aspect ratio.
+        //      Area is accounted for here (40% of quadScore = 24% effective weight).
+        //   2. Edge density (40%) — fraction of the quad perimeter supported by edge pixels.
+        //      Strongest indicator that the quad sits on real document edges.
+        // Previous formula double-counted area (44% effective weight), which made
+        // small documents (ID cards, business cards) unable to reach auto-capture threshold.
         val quadScore = scoreQuad(corners, imageArea)
-        val areaRatio = (quadArea(corners) / imageArea).coerceIn(0.0, 1.0)
 
         // Score margin penalty for ambiguous multi-candidate scenes
         val marginFactor = if (rankResult.candidateCount >= 2) {
@@ -224,11 +226,11 @@ private fun detectWithStrategy(
         } else {
             1.0
         }
-        val confidence = (0.6 * quadScore + 0.2 * areaRatio + 0.2 * edgeDensity) * marginFactor
+        val confidence = (0.6 * quadScore + 0.4 * edgeDensity) * marginFactor
 
         val ms = (System.nanoTime() - start) / 1_000_000.0
-        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms, confidence=%.2f (quad=%.2f, area=%.2f, edge=%.2f, margin=%.2f)".format(
-            ms, confidence, quadScore, areaRatio, edgeDensity, marginFactor))
+        Log.d(TAG, "detectWithStrategy($strategy): %.1f ms, confidence=%.2f (quad=%.2f, edge=%.2f, margin=%.2f)".format(
+            ms, confidence, quadScore, edgeDensity, marginFactor))
 
         return DetectionStatus(
             result = DocumentCorners(

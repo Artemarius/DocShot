@@ -48,6 +48,14 @@ class FrameAnalyzer(
     /** Last reported result, used when skipping frames. */
     private var lastResult: FrameDetectionResult? = null
 
+    /** Clears the smoother and miss counter so stability builds from scratch. */
+    fun resetSmoothing() {
+        smoother.clear()
+        consecutiveMisses = 0
+        frameCounter = 0
+        lastResult = null
+    }
+
     override fun analyze(imageProxy: ImageProxy) {
         frameCounter++
 
