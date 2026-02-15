@@ -5,6 +5,7 @@ import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import org.opencv.core.MatOfPoint2f
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -252,36 +253,30 @@ private fun interiorAngleDeg(a: Point, b: Point, c: Point): Double {
 }
 
 /**
- * Orders 4 points into consistent [TL, TR, BR, BL] order.
- * Algorithm: TL has smallest (x+y), BR has largest (x+y),
- * TR has smallest (y-x), BL has largest (y-x).
+ * Orders 4 points into consistent [TL, TR, BR, BL] clockwise order.
+ *
+ * Uses centroid-based angular sorting, which is robust at all document
+ * rotation angles including ~45° where the sum/difference method degenerates
+ * (two corners can share the same x+y or y-x, causing duplicate assignments).
+ *
+ * Algorithm:
+ * 1. Compute centroid of the 4 points.
+ * 2. Sort by atan2 angle from centroid (ascending = clockwise in image coords).
+ * 3. Rotate the cycle so TL (smallest x+y) comes first.
  */
 fun orderCorners(points: List<Point>): List<Point> {
     require(points.size == 4) { "Expected 4 points, got ${points.size}" }
 
-    val sums = DoubleArray(4) { points[it].x + points[it].y }
-    val diffs = DoubleArray(4) { points[it].y - points[it].x }
+    // Centroid
+    val cx = points.sumOf { it.x } / 4.0
+    val cy = points.sumOf { it.y } / 4.0
 
-    val tl = points[sums.indexOfMin()]
-    val br = points[sums.indexOfMax()]
-    val tr = points[diffs.indexOfMin()]
-    val bl = points[diffs.indexOfMax()]
+    // Sort by angle from centroid — ascending atan2 gives CW order
+    // in image coordinates (y-axis points downward).
+    val sorted = points.sortedBy { atan2(it.y - cy, it.x - cx) }
 
-    return listOf(tl, tr, br, bl)
-}
+    // Rotate so TL (smallest x+y sum) comes first
+    val tlIdx = sorted.indices.minBy { sorted[it].x + sorted[it].y }
 
-private fun DoubleArray.indexOfMin(): Int {
-    var minIdx = 0
-    for (i in 1 until size) {
-        if (this[i] < this[minIdx]) minIdx = i
-    }
-    return minIdx
-}
-
-private fun DoubleArray.indexOfMax(): Int {
-    var maxIdx = 0
-    for (i in 1 until size) {
-        if (this[i] > this[maxIdx]) maxIdx = i
-    }
-    return maxIdx
+    return List(4) { sorted[(tlIdx + it) % 4] }
 }
