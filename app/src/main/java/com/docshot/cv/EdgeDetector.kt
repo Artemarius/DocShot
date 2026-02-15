@@ -10,17 +10,23 @@ import org.opencv.imgproc.Imgproc
 private const val TAG = "DocShot:Edge"
 
 /**
- * Runs Canny edge detection with automatic threshold selection.
- * Thresholds are derived from the median intensity of the input image:
- * low = 0.67 * median, high = 1.33 * median.
+ * Runs Canny edge detection with automatic or explicit threshold selection.
+ * When [thresholdLow] and [thresholdHigh] are <= 0 (default), thresholds are
+ * derived from the median intensity: low = 0.67 * median, high = 1.33 * median.
+ * Explicit thresholds are useful for CLAHE-preprocessed images where the
+ * auto-threshold formula overestimates edge gradients.
  * Caller must release the returned Mat.
  */
-fun detectEdges(grayscale: Mat): Mat {
+fun detectEdges(
+    grayscale: Mat,
+    thresholdLow: Double = -1.0,
+    thresholdHigh: Double = -1.0
+): Mat {
     val start = System.nanoTime()
 
     val median = computeMedian(grayscale)
-    val low = (0.67 * median).coerceIn(10.0, 200.0)
-    val high = (1.33 * median).coerceIn(30.0, 250.0)
+    val low = if (thresholdLow > 0) thresholdLow else (0.67 * median).coerceIn(10.0, 200.0)
+    val high = if (thresholdHigh > 0) thresholdHigh else (1.33 * median).coerceIn(30.0, 250.0)
 
     val edges = Mat()
     Imgproc.Canny(grayscale, edges, low, high)

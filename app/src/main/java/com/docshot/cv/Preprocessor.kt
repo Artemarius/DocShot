@@ -108,7 +108,7 @@ fun analyzeScene(input: Mat): SceneAnalysis {
 
     val strategies = mutableListOf<PreprocessStrategy>()
 
-    // Low light or low contrast → CLAHE is most likely to help
+    // Low light or low contrast → CLAHE is most likely to help, try it first
     val isLowLight = meanVal < 80.0
     val isLowContrast = stddevVal < 30.0
     if (isLowLight || isLowContrast) {
@@ -117,6 +117,15 @@ fun analyzeScene(input: Mat): SceneAnalysis {
 
     // Always try standard
     strategies.add(PreprocessStrategy.STANDARD)
+
+    // CLAHE as fallback when not already prioritized: scenes with moderate
+    // contrast (stddev 30-60) may have document/background differences that
+    // are too subtle for auto-Canny after Gaussian blur. CLAHE + lower
+    // thresholds catches these cases. Short-circuit prevents wasted work
+    // when STANDARD already succeeds.
+    if (!isLowLight && !isLowContrast) {
+        strategies.add(PreprocessStrategy.CLAHE_ENHANCED)
+    }
 
     // Color input → saturation channel may isolate white document from colored bg
     if (input.channels() >= 3) {
@@ -176,7 +185,9 @@ private fun preprocessClahe(input: Mat): Mat {
     gray.release()
 
     val blurred = Mat()
-    Imgproc.GaussianBlur(enhanced, blurred, Size(9.0, 9.0), 0.0)
+    // 5x5 kernel (smaller than standard 9x9) preserves more edge gradient after CLAHE,
+    // critical for low-contrast scenes where gradients are already subtle.
+    Imgproc.GaussianBlur(enhanced, blurred, Size(5.0, 5.0), 0.0)
     enhanced.release()
     return blurred
 }

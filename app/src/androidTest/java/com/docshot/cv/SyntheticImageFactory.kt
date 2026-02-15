@@ -74,8 +74,8 @@ object SyntheticImageFactory {
      * Tests CLAHE strategy.
      */
     fun lowContrastDoc(
-        bgColor: Scalar = Scalar(200.0, 210.0, 220.0),
-        docColor: Scalar = Scalar(235.0, 235.0, 240.0),
+        bgColor: Scalar = Scalar(130.0, 135.0, 140.0),
+        docColor: Scalar = Scalar(210.0, 210.0, 215.0),
         corners: List<Point> = defaultA4Corners(),
         width: Int = DEFAULT_WIDTH,
         height: Int = DEFAULT_HEIGHT
@@ -205,9 +205,16 @@ object SyntheticImageFactory {
     }
 
     /**
-     * Document extending beyond the frame (partial visibility).
-     * @param visibleCorners Number of document corners visible in frame (1-3).
-     *   Creates a large quad where some corners lie outside the image.
+     * Document simulating partial visibility (extends to frame edges).
+     *
+     * Creates a large white rectangle with corners placed very close to
+     * 2+ frame edges (within [EDGE_PROXIMITY_PX]). This simulates what
+     * the camera sees when a document extends beyond the visible frame:
+     * the detected quad touches multiple edges.
+     *
+     * [analyzeContours] flags such quads as partial documents.
+     *
+     * @param visibleCorners Controls how many edges the quad touches (2 or 3+).
      */
     fun partialDoc(
         visibleCorners: Int = 3,
@@ -216,25 +223,20 @@ object SyntheticImageFactory {
     ): Mat {
         val image = Mat(height, width, CvType.CV_8UC3, Scalar(60.0, 60.0, 60.0))
 
-        // Document extends beyond right and bottom edges
+        // All corners inside frame but touching edges (within 5px proximity).
+        // Detected as a valid quad AND flagged as partial (touches 2+ edges).
         val corners = when (visibleCorners) {
             3 -> listOf(
-                Point(100.0, 50.0),    // TL - visible
-                Point(900.0, 50.0),    // TR - outside right edge
-                Point(900.0, 550.0),   // BR - outside right edge
-                Point(100.0, 550.0)    // BL - visible
-            )
-            2 -> listOf(
-                Point(100.0, 50.0),    // TL - visible
-                Point(900.0, 50.0),    // TR - outside right
-                Point(900.0, 700.0),   // BR - outside right+bottom
-                Point(100.0, 700.0)    // BL - outside bottom
+                Point(100.0, 3.0),             // TL - near top edge
+                Point(width - 3.0, 3.0),       // TR - near top + right edges
+                Point(width - 3.0, 550.0),     // BR - near right edge
+                Point(100.0, 550.0)            // BL - interior
             )
             else -> listOf(
-                Point(100.0, 50.0),    // TL - visible
-                Point(900.0, -50.0),   // TR - outside right+top
-                Point(900.0, 700.0),   // BR - outside right+bottom
-                Point(100.0, 700.0)    // BL - outside bottom
+                Point(100.0, 3.0),             // TL - near top edge
+                Point(width - 3.0, 3.0),       // TR - near top + right edges
+                Point(width - 3.0, height - 3.0), // BR - near right + bottom edges
+                Point(100.0, height - 3.0)     // BL - near bottom edge
             )
         }
 

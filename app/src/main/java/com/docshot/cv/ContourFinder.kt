@@ -89,9 +89,18 @@ fun analyzeContours(edges: Mat, imageSize: Size): ContourAnalysis {
 
         if (approxPoints.size == 4) {
             quads.add(approxPoints)
+            // A valid quad that touches 2+ frame edges may be a document
+            // extending beyond the frame — the visible portion just happens
+            // to be rectangular. Flag as partial so the UI can hint even if
+            // confidence-based suppression later discards this quad.
+            if (!hasPartialDocument && area >= partialDocMinArea) {
+                if (touchesFrameEdges(approxPoints, imageSize) >= 2) {
+                    hasPartialDocument = true
+                }
+            }
         } else if (!hasPartialDocument && area >= partialDocMinArea) {
-            // Check if this large non-quad contour touches 2+ frame edges,
-            // indicating a document that extends beyond the frame
+            // Large non-quad contour touching 2+ frame edges indicates
+            // a document that extends beyond the frame
             if (touchesFrameEdges(points, imageSize) >= 2) {
                 hasPartialDocument = true
             }

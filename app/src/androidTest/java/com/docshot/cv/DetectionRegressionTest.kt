@@ -147,17 +147,16 @@ class DetectionRegressionTest {
     }
 
     @Test
-    fun partialDoc_returnsNullWithPartialFlag() {
+    fun partialDoc_flagsPartialDocument() {
         val image = SyntheticImageFactory.partialDoc(visibleCorners = 3)
         try {
             val status = detectDocumentWithStatus(image)
-            // Partial document should either: return null result, or flag isPartialDocument
-            if (status.result == null) {
-                assertTrue(
-                    "Partial doc should set isPartialDocument=true when no valid quad found",
-                    status.isPartialDocument
-                )
-            }
+            // A quad touching 2+ frame edges should always flag isPartialDocument,
+            // whether or not the quad is accepted as a valid detection.
+            assertTrue(
+                "Partial doc should set isPartialDocument=true",
+                status.isPartialDocument
+            )
             Log.d(TAG, "Partial doc: result=${status.result != null}, partial=${status.isPartialDocument}")
         } finally {
             image.release()

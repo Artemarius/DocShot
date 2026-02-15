@@ -144,10 +144,15 @@ private fun detectWithStrategy(input: Mat, strategy: PreprocessStrategy): Detect
     val imageArea = imageSize.width * imageSize.height
 
     val preprocessed = preprocessWithStrategy(input, strategy)
-    val edges = if (strategy == PreprocessStrategy.HEAVY_MORPH) {
-        detectEdgesHeavyMorph(preprocessed)
-    } else {
-        detectEdges(preprocessed)
+    val edges = when (strategy) {
+        PreprocessStrategy.HEAVY_MORPH -> detectEdgesHeavyMorph(preprocessed)
+        PreprocessStrategy.CLAHE_ENHANCED -> {
+            // CLAHE-enhanced images need lower Canny thresholds: the auto-threshold
+            // formula (0.67*median) overestimates for low-contrast scenes where edge
+            // gradients are subtle even after histogram equalization.
+            detectEdges(preprocessed, thresholdLow = 30.0, thresholdHigh = 60.0)
+        }
+        else -> detectEdges(preprocessed)
     }
     preprocessed.release()
 
