@@ -58,7 +58,7 @@ app/src/main/java/com/docshot/
 - **Phase 1-9:** Classical CV pipeline + flash/capture UX, fully complete
 - **Phase 10:** Lighting gradient correction — complete ("Even Light" filter)
 - **Phase 11:** Capture UX & auto-capture quality — freeze overlay + auto-capture hardening + AF lock complete; aspect ratio slider remaining; quad tracking deprioritized
-- **Phase 12:** Google Play release — app icon + splash screen complete; privacy policy, signing config, store listing text, README polish complete; keystore generated + signed AAB built (63MB bundle, ~26MB per-device); remaining: Play Console forms (screenshots, content rating, data safety), demo media, submit for review
+- **Phase 12:** Google Play release — app icon + splash screen complete; privacy policy, signing config, store listing text, README polish complete; keystore generated + signed AAB built (63MB bundle, ~26MB per-device); GitHub Pages enabled for privacy policy; remaining: Play Console forms (screenshots, content rating, data safety), demo media, submit for review
 
 ## Performance Budget
 - Detection per frame: < 30ms (for real-time preview overlay)

@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <defs>
+    <!-- Background gradient matching app theme -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#003738"/>
+      <stop offset="100%" stop-color="#004F50"/>
+    </linearGradient>
+    <!-- Subtle radial glow behind the document -->
+    <radialGradient id="glow" cx="38%" cy="50%" r="35%">
+      <stop offset="0%" stop-color="#4DD0E1" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#003738" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Scan line glow -->
+    <filter id="scanGlow" x="-20%" y="-200%" width="140%" height="500%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <!-- Corner dot glow -->
+    <filter id="dotGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="500" fill="url(#bg)"/>
+  <rect width="1024" height="500" fill="url(#glow)"/>
+
+  <!-- ===== LEFT SIDE: Skewed document (before) ===== -->
+
+  <!-- Shadow under skewed document -->
+  <polygon points="155,105 385,125 395,395 135,385" fill="#002020" opacity="0.4"
+           transform="translate(4,6)"/>
+
+  <!-- Skewed document (perspective, as if on a desk) -->
+  <polygon points="155,105 385,125 395,395 135,385" fill="#F5F5F0"/>
+
+  <!-- Text lines on skewed document -->
+  <line x1="175" y1="160" x2="310" y2="165" stroke="#B0BEC5" stroke-width="3" stroke-linecap="round"/>
+  <line x1="173" y1="180" x2="335" y2="186" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="171" y1="198" x2="320" y2="204" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="169" y1="216" x2="340" y2="223" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="167" y1="236" x2="305" y2="243" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="165" y1="256" x2="350" y2="264" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="162" y1="278" x2="330" y2="286" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="159" y1="300" x2="355" y2="309" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="157" y1="322" x2="315" y2="330" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="154" y1="344" x2="345" y2="354" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Detection quad overlay (cyan, matching app overlay) -->
+  <polygon points="155,105 385,125 395,395 135,385"
+           fill="none" stroke="#4DD0E1" stroke-width="2.5" stroke-linejoin="round"/>
+
+  <!-- Corner dots -->
+  <circle cx="155" cy="105" r="5" fill="#4DD0E1" filter="url(#dotGlow)"/>
+  <circle cx="385" cy="125" r="5" fill="#4DD0E1" filter="url(#dotGlow)"/>
+  <circle cx="395" cy="395" r="5" fill="#4DD0E1" filter="url(#dotGlow)"/>
+  <circle cx="135" cy="385" r="5" fill="#4DD0E1" filter="url(#dotGlow)"/>
+
+  <!-- Scan line sweeping across the document -->
+  <line x1="162" y1="270" x2="352" y2="278" stroke="#4DD0E1" stroke-width="2"
+        stroke-linecap="round" filter="url(#scanGlow)" opacity="0.8"/>
+
+  <!-- ===== CENTER: Arrow ===== -->
+  <g transform="translate(460, 230)">
+    <!-- Arrow body -->
+    <line x1="0" y1="20" x2="70" y2="20" stroke="#4DD0E1" stroke-width="3" stroke-linecap="round"/>
+    <!-- Arrow head -->
+    <polyline points="55,8 70,20 55,32" fill="none" stroke="#4DD0E1" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- ===== RIGHT SIDE: Clean rectified document (after) ===== -->
+
+  <!-- Shadow under clean document -->
+  <rect x="568" y="86" width="220" height="310" rx="2" fill="#002020" opacity="0.3"
+        transform="translate(4,6)"/>
+
+  <!-- Clean rectified document -->
+  <rect x="568" y="86" width="220" height="310" rx="2" fill="#FFFFFF"/>
+
+  <!-- Corner fold -->
+  <polygon points="748,86 788,86 788,116" fill="#E0F7FA" opacity="0"/>
+  <path d="M748,86 L788,86 L788,116 Z" fill="#B2EBF2"/>
+  <line x1="748" y1="86" x2="788" y2="116" stroke="#80DEEA" stroke-width="0.8"/>
+
+  <!-- Clean text lines -->
+  <line x1="588" y1="130" x2="720" y2="130" stroke="#90A4AE" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="588" y1="155" x2="755" y2="155" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="175" x2="730" y2="175" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="195" x2="750" y2="195" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="215" x2="710" y2="215" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="237" x2="755" y2="237" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="259" x2="735" y2="259" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="281" x2="760" y2="281" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="303" x2="720" y2="303" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="325" x2="745" y2="325" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="347" x2="700" y2="347" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="588" y1="369" x2="750" y2="369" stroke="#CFD8DC" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- ===== TEXT ===== -->
+
+  <!-- App name -->
+  <text x="512" y="455" text-anchor="middle" font-family="'Segoe UI', Roboto, sans-serif"
+        font-size="36" font-weight="600" fill="#FFFFFF" letter-spacing="1">
+    DocShot
+  </text>
+
+  <!-- Tagline -->
+  <text x="512" y="483" text-anchor="middle" font-family="'Segoe UI', Roboto, sans-serif"
+        font-size="16" fill="#80DEEA" letter-spacing="0.5">
+    Point. Auto-capture. Done.
+  </text>
+</svg>
