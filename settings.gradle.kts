@@ -18,4 +18,5 @@ rootProject.name = "DocShot"
 
 include(":app")
 include(":opencv")
-project(":opencv").projectDir = file("D:/OpenCV-android-sdk/sdk")
+val opencvSdkDir = System.getenv("OPENCV_ANDROID_SDK") ?: "D:/OpenCV-android-sdk"
+project(":opencv").projectDir = file("$opencvSdkDir/sdk")
