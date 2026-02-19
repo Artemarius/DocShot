@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,7 +76,10 @@ fun ResultScreen(
     onRetake: () -> Unit,
     onAdjust: () -> Unit = {},
     onRotate: () -> Unit = {},
-    onAspectRatioChange: (Double) -> Unit = {}
+    onAspectRatioChange: (Double) -> Unit = {},
+    isAspectRatioLocked: Boolean = false,
+    lockedAspectRatio: Float = 0.707f,
+    onToggleAspectRatioLock: (Boolean, Float) -> Unit = { _, _ -> }
 ) {
     var showRectified by rememberSaveable { mutableStateOf(true) }
     var selectedFilter by rememberSaveable { mutableStateOf(PostProcessFilter.NONE.name) }
@@ -93,8 +98,10 @@ fun ResultScreen(
         minOf(w, h) / maxOf(w, h)
     }
 
+    // Default to locked ratio when locked, otherwise A4
+    val defaultRatio = if (isAspectRatioLocked) lockedAspectRatio else 0.707f
     var currentRatio by rememberSaveable {
-        mutableFloatStateOf(estimate?.estimatedRatio?.toFloat() ?: bitmapRatio)
+        mutableFloatStateOf(defaultRatio)
     }
 
     // Reactive format label: updates as slider moves
@@ -108,8 +115,8 @@ fun ResultScreen(
     // Format dropdown state
     var showFormatMenu by remember { mutableStateOf(false) }
 
-    // Debounced re-warp when slider changes
-    var pendingRatio by remember { mutableStateOf<Float?>(null) }
+    // Debounced re-warp when slider changes; initialized to default to trigger first warp
+    var pendingRatio by remember { mutableStateOf<Float?>(currentRatio) }
     LaunchedEffect(pendingRatio) {
         val ratio = pendingRatio ?: return@LaunchedEffect
         delay(300) // debounce
@@ -222,7 +229,7 @@ fun ResultScreen(
             )
         }
 
-        // Aspect ratio: clickable format label (dropdown) + slider
+        // Aspect ratio: lock button + clickable format label (dropdown) + slider
         AnimatedVisibility(visible = showRectified && data.corners.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -230,22 +237,44 @@ fun ResultScreen(
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Lock/unlock aspect ratio button
+                IconButton(
+                    onClick = {
+                        onToggleAspectRatioLock(!isAspectRatioLocked, currentRatio)
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isAspectRatioLocked) Icons.Filled.Lock
+                            else Icons.Filled.LockOpen,
+                        contentDescription = if (isAspectRatioLocked) "Unlock aspect ratio"
+                            else "Lock aspect ratio",
+                        modifier = Modifier.size(18.dp),
+                        tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 // Clickable format label with dropdown
                 Box {
                     Row(
-                        modifier = Modifier.clickable { showFormatMenu = true },
+                        modifier = Modifier.clickable(enabled = !isAspectRatioLocked) {
+                            showFormatMenu = true
+                        },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = currentFormatLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.primary
                         )
                         Icon(
                             imageVector = Icons.Filled.ArrowDropDown,
                             contentDescription = "Select format",
                             modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.primary
                         )
                     }
                     DropdownMenu(
@@ -267,12 +296,13 @@ fun ResultScreen(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Slider fills remaining space
+                // Slider fills remaining space (disabled when locked)
                 Slider(
                     value = currentRatio,
                     onValueChange = { currentRatio = it },
                     onValueChangeFinished = { pendingRatio = currentRatio },
                     valueRange = 0.25f..1.0f,
+                    enabled = !isAspectRatioLocked,
                     modifier = Modifier.weight(1f)
                 )
             }

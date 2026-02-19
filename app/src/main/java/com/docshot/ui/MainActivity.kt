@@ -108,7 +108,8 @@ private fun MainContent() {
                     onShowingResult = { showingResult = it }
                 )
                 1 -> GalleryScreen(
-                    onShowingResult = { showingResult = it }
+                    onShowingResult = { showingResult = it },
+                    preferencesRepository = preferencesRepository
                 )
             }
         }

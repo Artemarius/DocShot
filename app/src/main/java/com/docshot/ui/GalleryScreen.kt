@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -36,14 +37,22 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.docshot.R
+import com.docshot.util.DocShotSettings
+import com.docshot.util.UserPreferencesRepository
+import kotlinx.coroutines.launch
 
 @Composable
 fun GalleryScreen(
     viewModel: GalleryViewModel = viewModel(),
-    onShowingResult: (Boolean) -> Unit = {}
+    onShowingResult: (Boolean) -> Unit = {},
+    preferencesRepository: UserPreferencesRepository? = null
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settings by preferencesRepository?.settings?.collectAsState(
+        initial = DocShotSettings()
+    ) ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(DocShotSettings()) }
 
     // Notify parent when showing/hiding result screen
     LaunchedEffect(state) {
@@ -148,7 +157,15 @@ fun GalleryScreen(
                 },
                 onShare = { viewModel.shareResult(context) },
                 onRetake = { viewModel.reset() },
-                onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) }
+                onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) },
+                isAspectRatioLocked = settings.aspectRatioLocked,
+                lockedAspectRatio = settings.lockedAspectRatio,
+                onToggleAspectRatioLock = { locked, ratio ->
+                    scope.launch {
+                        preferencesRepository?.setAspectRatioLocked(locked)
+                        preferencesRepository?.setLockedAspectRatio(ratio)
+                    }
+                }
             )
         }
 

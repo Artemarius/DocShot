@@ -244,11 +244,11 @@ class CameraViewModel : ViewModel() {
         _cameraState.value = CameraUiState.Capturing
         _hapticEvent.tryEmit(Unit)
 
-        // Turn off flash immediately after shutter to save battery
+        // Turn off torch physically after shutter to save battery,
+        // but preserve the logical state so flash re-enables on return to camera
         if (_flashEnabled.value) {
             camera?.cameraControl?.enableTorch(false)
-            _flashEnabled.value = false
-            Log.d(TAG, "Flash disabled after capture")
+            Log.d(TAG, "Torch off for capture (flash state preserved)")
         }
 
         capture.takePicture(
@@ -600,6 +600,10 @@ class CameraViewModel : ViewModel() {
         idleEnteredAt = android.os.SystemClock.elapsedRealtime()
         frameAnalyzer.resetSmoothing()
         _cameraState.value = CameraUiState.Idle
+        // Re-enable torch if flash was logically on (it was turned off during capture)
+        if (_flashEnabled.value) {
+            camera?.cameraControl?.enableTorch(true)
+        }
     }
 
     /**

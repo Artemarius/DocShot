@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -63,6 +64,7 @@ import com.docshot.R
 import com.docshot.util.UserPreferencesRepository
 import com.docshot.util.rememberCameraPermissionState
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -101,6 +103,12 @@ fun CameraPreview(
     val autoCapEnabled by viewModel.autoCapEnabled.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val scope = rememberCoroutineScope()
+
+    // Collect aspect ratio lock settings continuously
+    val settings by preferencesRepository?.settings?.collectAsState(
+        initial = com.docshot.util.DocShotSettings()
+    ) ?: remember { androidx.compose.runtime.mutableStateOf(com.docshot.util.DocShotSettings()) }
 
     // Notify parent when showing/hiding result screen
     LaunchedEffect(cameraState) {
@@ -166,7 +174,15 @@ fun CameraPreview(
             onRetake = { viewModel.resetToCamera() },
             onAdjust = { viewModel.adjustFromResult() },
             onRotate = { viewModel.rotateResult() },
-            onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) }
+            onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) },
+            isAspectRatioLocked = settings.aspectRatioLocked,
+            lockedAspectRatio = settings.lockedAspectRatio,
+            onToggleAspectRatioLock = { locked, ratio ->
+                scope.launch {
+                    preferencesRepository?.setAspectRatioLocked(locked)
+                    preferencesRepository?.setLockedAspectRatio(ratio)
+                }
+            }
         )
         return
     }
@@ -224,7 +240,10 @@ fun CameraPreview(
 
         // Flash toggle button (top-right)
         IconButton(
-            onClick = { viewModel.toggleFlash() },
+            onClick = {
+                viewModel.toggleFlash()
+                scope.launch { preferencesRepository?.setFlashEnabled(viewModel.flashEnabled.value) }
+            },
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 16.dp, end = 16.dp)

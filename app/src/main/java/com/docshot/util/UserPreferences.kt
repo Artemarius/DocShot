@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -23,7 +24,9 @@ data class DocShotSettings(
     val defaultFilter: String = "NONE",
     val showDebugOverlay: Boolean = false,
     val hapticFeedback: Boolean = true,
-    val flashEnabled: Boolean = false
+    val flashEnabled: Boolean = false,
+    val aspectRatioLocked: Boolean = false,
+    val lockedAspectRatio: Float = 0.707f
 )
 
 /**
@@ -42,6 +45,8 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_SHOW_DEBUG_OVERLAY = booleanPreferencesKey("show_debug_overlay")
         val KEY_HAPTIC_FEEDBACK = booleanPreferencesKey("haptic_feedback")
         val KEY_FLASH_ENABLED = booleanPreferencesKey("flash_enabled")
+        val KEY_ASPECT_RATIO_LOCKED = booleanPreferencesKey("aspect_ratio_locked")
+        val KEY_LOCKED_ASPECT_RATIO = floatPreferencesKey("locked_aspect_ratio")
     }
 
     /**
@@ -56,7 +61,9 @@ class UserPreferencesRepository(private val context: Context) {
             defaultFilter = prefs[KEY_DEFAULT_FILTER] ?: "NONE",
             showDebugOverlay = prefs[KEY_SHOW_DEBUG_OVERLAY] ?: false,
             hapticFeedback = prefs[KEY_HAPTIC_FEEDBACK] ?: true,
-            flashEnabled = prefs[KEY_FLASH_ENABLED] ?: false
+            flashEnabled = prefs[KEY_FLASH_ENABLED] ?: false,
+            aspectRatioLocked = prefs[KEY_ASPECT_RATIO_LOCKED] ?: false,
+            lockedAspectRatio = prefs[KEY_LOCKED_ASPECT_RATIO] ?: 0.707f
         )
     }
 
@@ -91,5 +98,14 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setFlashEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[KEY_FLASH_ENABLED] = enabled }
+    }
+
+    suspend fun setAspectRatioLocked(locked: Boolean) {
+        context.dataStore.edit { prefs -> prefs[KEY_ASPECT_RATIO_LOCKED] = locked }
+    }
+
+    suspend fun setLockedAspectRatio(ratio: Float) {
+        require(ratio in 0.25f..1.0f) { "Aspect ratio must be 0.25-1.0, got $ratio" }
+        context.dataStore.edit { prefs -> prefs[KEY_LOCKED_ASPECT_RATIO] = ratio }
     }
 }
