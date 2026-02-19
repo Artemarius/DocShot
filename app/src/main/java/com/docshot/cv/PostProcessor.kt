@@ -38,7 +38,7 @@ enum class PostProcessFilter {
  */
 fun applyFilter(source: Bitmap, filter: PostProcessFilter): Bitmap {
     return when (filter) {
-        PostProcessFilter.NONE -> source.copy(source.config, false)
+        PostProcessFilter.NONE -> source.copy(source.config ?: Bitmap.Config.ARGB_8888, false)
         PostProcessFilter.BLACK_WHITE -> adaptiveThresholdBW(source)
         PostProcessFilter.CONTRAST -> enhanceContrast(source)
         PostProcessFilter.COLOR_CORRECT -> correctColor(source)
