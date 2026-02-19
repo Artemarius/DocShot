@@ -1,5 +1,6 @@
 package com.docshot.ui
 
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -50,10 +51,13 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MainContent() {
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val hasCamera = remember {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    }
+    var selectedTab by rememberSaveable { mutableIntStateOf(if (hasCamera) 0 else 1) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showingResult by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     val preferencesRepository = remember { UserPreferencesRepository(context) }
 
     if (showSettings) {
@@ -78,17 +82,19 @@ private fun MainContent() {
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    FilterChip(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        label = { Text("Camera") }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    if (hasCamera) {
+                        FilterChip(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            label = { Text("Camera") }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                     FilterChip(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
                         label = { Text("Import") },
-                        modifier = Modifier.padding(start = 8.dp)
+                        modifier = if (hasCamera) Modifier.padding(start = 8.dp) else Modifier
                     )
                     Spacer(modifier = Modifier.weight(1f))
                     IconButton(onClick = { showSettings = true }) {

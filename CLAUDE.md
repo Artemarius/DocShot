@@ -60,6 +60,7 @@ app/src/main/java/com/docshot/
 - **Phase 11:** Capture UX & auto-capture quality — freeze overlay + auto-capture hardening + AF lock complete; aspect ratio slider remaining; quad tracking deprioritized
 - **Phase 12:** Google Play release — app icon + splash screen complete; privacy policy, signing config, store listing text, README polish complete; keystore generated + signed AAB built (63MB bundle, ~26MB per-device); GitHub Pages enabled for privacy policy; v1.1.0 released (versionCode 2) with UX polish; remaining: Play Console forms (screenshots, content rating, data safety), demo media, submit for review
 - **UX Polish (v1.1.0):** Flash persistence across captures, A4 default aspect ratio, aspect ratio lock — complete
+- **No-Camera Fallback (v1.1.2):** Graceful handling of devices without camera hardware (emulators, tablets). Manifest camera feature marked optional (`required="false"`), auto-selects Import tab when no camera detected, Camera tab hidden, defensive guard in CameraPermissionScreen. Enables Play Store screenshot capture on no-camera emulators.
 
 ## Performance Budget
 - Detection per frame: < 30ms (for real-time preview overlay)

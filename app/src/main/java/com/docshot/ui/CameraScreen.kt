@@ -1,6 +1,7 @@
 package com.docshot.ui
 
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.os.Build
 import android.util.Log
@@ -76,6 +77,16 @@ fun CameraPermissionScreen(
     preferencesRepository: UserPreferencesRepository? = null,
     onShowingResult: (Boolean) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val hasCamera = remember {
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    }
+
+    if (!hasCamera) {
+        NoCameraMessage()
+        return
+    }
+
     val permissionState = rememberCameraPermissionState()
 
     when {
@@ -637,6 +648,20 @@ fun CameraDeniedMessage() {
     ) {
         Text(
             text = "Camera permission is required to scan documents.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+    }
+}
+
+@Composable
+private fun NoCameraMessage() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "No camera available on this device.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground
         )
