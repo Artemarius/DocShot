@@ -15,11 +15,12 @@ Every phone has a document scanner buried 3 taps deep in the camera app, and it 
 - **Real-time preview** — Live quadrilateral overlay tracking the detected document boundary at 30fps
 - **Perspective correction** — Sub-pixel corner refinement + homography warp produces a clean rectangular output
 - **Orientation detection** — Sobel gradient + ink-density analysis ensures the result is right-side up
-- **Aspect ratio adjustment** — Auto-snaps to common formats (A4, US Letter, ID card, business card) with manual slider override, verified via homography decomposition
+- **Aspect ratio adjustment** — Defaults to A4, auto-snaps to common formats (A4, US Letter, ID card, business card) with manual slider override, verified via homography decomposition
+- **Aspect ratio lock** — Lock your chosen ratio so it persists across successive scans of same-format documents
 - **Gallery import** — Rectify existing photos with automatic detection or manual corner adjustment
 - **Manual corner adjustment** — Draggable handles with magnifier loupe when auto-detection needs help
 - **Post-processing filters** — B&W (adaptive threshold), High Contrast (CLAHE), Even Light (gradient correction for angled lighting)
-- **Flash control** — Torch toggle for low-light scanning, persisted across sessions
+- **Flash control** — Torch toggle for low-light scanning, persisted across sessions and across captures (re-enables automatically after each scan)
 - **Confidence-gated capture** — High confidence goes straight to result; low confidence routes to manual adjustment; very low is suppressed entirely
 - **Multi-strategy detection** — 5 preprocessing strategies (standard, CLAHE, saturation, bilateral, morphological) with scene analysis to handle varied backgrounds
 
