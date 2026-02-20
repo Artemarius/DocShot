@@ -282,7 +282,7 @@ class GalleryViewModel : ViewModel() {
 
                 // Use estimated ratio when confidence is sufficient (>= 0.35);
                 // otherwise fall back to raw edge-length rectification.
-                val rectified = if (arEstimate.confidence >= GALLERY_AR_MIN_CONFIDENCE) {
+                val rectified = if (arEstimate.estimationConfidence >= GALLERY_AR_MIN_CONFIDENCE) {
                     rectifyWithAspectRatio(
                         source = mat,
                         corners = refined,

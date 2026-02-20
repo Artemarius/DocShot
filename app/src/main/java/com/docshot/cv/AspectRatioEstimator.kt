@@ -25,33 +25,100 @@ data class AspectRatioEstimate(
     val estimatedRatio: Double,
     val matchedFormat: KnownFormat?,
     val confidence: Double,
-    val verifiedByHomography: Boolean = false
+    val verifiedByHomography: Boolean = false,
+    /** Estimation quality independent of format snap (based on severity regime). */
+    val estimationConfidence: Double = confidence,
+    /** Raw ratio from angular/projective estimation, before format snapping. */
+    val rawRatio: Double = estimatedRatio
 )
 
-/** Simplified camera intrinsics for homography verification. */
-data class CameraIntrinsics(val fx: Double, val fy: Double, val cx: Double, val cy: Double)
+/**
+ * Camera intrinsics for homography-based aspect ratio estimation.
+ *
+ * [fx], [fy], [cx], [cy] are in the sensor's native coordinate system
+ * (landscape, from LENS_INTRINSIC_CALIBRATION or sensor-size fallback).
+ * [sensorWidth] x [sensorHeight] is the sensor pixel array size (landscape).
+ */
+data class CameraIntrinsics(
+    val fx: Double,
+    val fy: Double,
+    val cx: Double,
+    val cy: Double,
+    val sensorWidth: Int = 0,
+    val sensorHeight: Int = 0
+) {
+    /**
+     * Returns intrinsics scaled and rotated to match a capture frame of the
+     * given [frameWidth] x [frameHeight] with [rotationDegrees] applied.
+     *
+     * Sensor intrinsics are in landscape orientation. After 90/270 deg rotation
+     * the x/y axes swap, so fx↔fy and cx↔cy must be swapped too. Resolution
+     * scaling is applied when the frame size differs from the sensor pixel array.
+     */
+    fun forCaptureFrame(frameWidth: Int, frameHeight: Int, rotationDegrees: Int): CameraIntrinsics {
+        if (sensorWidth == 0 || sensorHeight == 0) return this
+
+        return when (rotationDegrees) {
+            90, 270 -> {
+                // After rotation: frame width maps to sensor height axis, frame height to sensor width axis
+                val scaleX = frameWidth.toDouble() / sensorHeight
+                val scaleY = frameHeight.toDouble() / sensorWidth
+                CameraIntrinsics(
+                    fx = fy * scaleX,
+                    fy = fx * scaleY,
+                    cx = cy * scaleX,
+                    cy = cx * scaleY,
+                    sensorWidth = sensorWidth,
+                    sensorHeight = sensorHeight
+                )
+            }
+            180 -> {
+                val scaleX = frameWidth.toDouble() / sensorWidth
+                val scaleY = frameHeight.toDouble() / sensorHeight
+                CameraIntrinsics(
+                    fx = fx * scaleX,
+                    fy = fy * scaleY,
+                    cx = cx * scaleX,
+                    cy = cy * scaleY,
+                    sensorWidth = sensorWidth,
+                    sensorHeight = sensorHeight
+                )
+            }
+            else -> {
+                val scaleX = frameWidth.toDouble() / sensorWidth
+                val scaleY = frameHeight.toDouble() / sensorHeight
+                CameraIntrinsics(
+                    fx = fx * scaleX,
+                    fy = fy * scaleY,
+                    cx = cx * scaleX,
+                    cy = cy * scaleY,
+                    sensorWidth = sensorWidth,
+                    sensorHeight = sensorHeight
+                )
+            }
+        }
+    }
+}
 
 /** Known document formats — ratio is min(side)/max(side), always <= 1.0. */
 val KNOWN_FORMATS = listOf(
     KnownFormat("A4", 1.0 / 1.414),            // 0.707
     KnownFormat("US Letter", 1.0 / 1.294),      // 0.773
     KnownFormat("ID Card", 1.0 / 1.586),        // 0.631
-    KnownFormat("Business Card", 1.0 / 1.75),   // 0.571
-    KnownFormat("Receipt", 1.0 / 3.0),           // 0.333
     KnownFormat("Square", 1.0)                    // 1.000
 )
 
 /** Max distance from a known ratio to consider snapping. */
-private const val SNAP_THRESHOLD = 0.06
+private const val SNAP_THRESHOLD = 0.035
 
 /** Gaussian sigma for snap confidence scoring. */
-private const val SNAP_SIGMA = 0.04
+private const val SNAP_SIGMA = 0.025
 
 /** Perspective severity threshold below which angular correction is used (degrees). */
-private const val SEVERITY_LOW_THRESHOLD = 15.0
+private const val SEVERITY_LOW_THRESHOLD = 5.0
 
 /** Perspective severity threshold above which projective estimation is used (degrees). */
-private const val SEVERITY_HIGH_THRESHOLD = 20.0
+private const val SEVERITY_HIGH_THRESHOLD = 10.0
 
 /**
  * Computes the raw aspect ratio (min/max, always <= 1.0) from quad edge pairs.
@@ -138,10 +205,16 @@ fun perspectiveSeverity(corners: List<Point>): Double {
 
 /**
  * Computes a perspective-corrected aspect ratio for low-severity views (quad is
- * close to a rectangle). Applies a foreshortening correction based on the
- * convergence angles of opposite edge pairs.
+ * close to a rectangle). Corrects each dimension independently for foreshortening
+ * before computing the ratio, so the result is orientation-invariant.
  *
- * corrected_ratio = raw_ratio * cos(alpha_v / 2) / cos(alpha_h / 2)
+ * Horizontal convergence (alphaH) = angle between top and bottom edges.
+ * This indicates tilt around a horizontal axis, which foreshortens the
+ * vertical dimension: true_V = apparent_V / cos(alphaH / 2).
+ *
+ * Vertical convergence (alphaV) = angle between left and right edges.
+ * This indicates tilt around a vertical axis, which foreshortens the
+ * horizontal dimension: true_H = apparent_H / cos(alphaV / 2).
  *
  * @param corners 4 points in TL, TR, BR, BL order
  * @return corrected ratio (min/max, always in [0.1, 1.0])
@@ -150,7 +223,11 @@ fun angularCorrectedRatio(corners: List<Point>): Double {
     require(corners.size == 4) { "Expected 4 corners" }
     val (tl, tr, br, bl) = corners
 
-    val rawRatio = computeRawRatio(corners)
+    // Apparent edge lengths
+    val sideH = (distance(tl, tr) + distance(bl, br)) / 2.0  // horizontal edges
+    val sideV = (distance(tl, bl) + distance(tr, br)) / 2.0  // vertical edges
+
+    if (sideH <= 0.0 || sideV <= 0.0) return 1.0
 
     // Horizontal convergence: angle between top edge and bottom edge
     val topDir = Point(tr.x - tl.x, tr.y - tl.y)
@@ -162,8 +239,11 @@ fun angularCorrectedRatio(corners: List<Point>): Double {
     val rightDir = Point(br.x - tr.x, br.y - tr.y)
     val alphaV = angleBetweenVectors(leftDir, rightDir)
 
-    val correction = cos(alphaV / 2.0) / cos(alphaH / 2.0)
-    return (rawRatio * correction).coerceIn(0.1, 1.0)
+    // Correct each dimension independently, then take min/max
+    val trueH = sideH / cos(alphaV / 2.0)  // horizontal foreshortened by vertical convergence
+    val trueV = sideV / cos(alphaH / 2.0)  // vertical foreshortened by horizontal convergence
+
+    return (min(trueH, trueV) / maxOf(trueH, trueV)).coerceIn(0.1, 1.0)
 }
 
 /** Angle between two 2D vectors in radians (always positive, [0, PI]). */
@@ -179,28 +259,25 @@ private fun angleBetweenVectors(v1: Point, v2: Point): Double {
 
 /**
  * Estimates the document aspect ratio using full projective reconstruction with
- * vanishing points and camera intrinsics. Suitable for heavily skewed views where
- * edge-length ratios are unreliable.
+ * camera intrinsics. Suitable for heavily skewed views where edge-length ratios
+ * are unreliable.
  *
  * Algorithm:
- * 1. Compute homography H from corners to a unit square
+ * 1. Compute H mapping unit square → image corners (world → image direction)
  * 2. Decompose M = K_inv * H into [r1 r2 t]
- * 3. Aspect ratio correction = ||r1|| / ||r2||
- * 4. Apply correction to the raw edge-length ratio
+ * 3. Aspect ratio = ||r1|| / ||r2|| (deviation from square)
  *
- * All vanishing point computations stay in homogeneous coordinates to avoid
- * numerical instability when VPs are near infinity (near-parallel edges).
+ * The intrinsics must be in the same coordinate system as the corners (i.e.
+ * already scaled/rotated for the capture frame). Use [CameraIntrinsics.forCaptureFrame].
  *
- * @param corners 4 points in TL, TR, BR, BL order
- * @param intrinsics camera calibration parameters
+ * @param corners 4 points in TL, TR, BR, BL order (capture frame coordinates)
+ * @param intrinsics camera calibration parameters (in capture frame coordinates)
  * @return estimated ratio (min/max, always <= 1.0), or null if computation fails
  */
 fun projectiveAspectRatio(corners: List<Point>, intrinsics: CameraIntrinsics): Double? {
     require(corners.size == 4) { "Expected 4 corners" }
     val (tl, tr, br, bl) = corners
 
-    // Map to a square destination -- the ratio ||r1||/||r2|| from decomposition
-    // reveals how the true document aspect ratio deviates from 1:1
     val dstSize = 1000.0
 
     var srcPts: MatOfPoint2f? = null
@@ -211,20 +288,23 @@ fun projectiveAspectRatio(corners: List<Point>, intrinsics: CameraIntrinsics): D
     var M: Mat? = null
 
     try {
-        // Compute H mapping corners to a unit (square) destination.
-        // If the document were truly square, r1 and r2 would have equal norms.
-        // The ratio ||r1||/||r2|| reveals how the document deviates from square.
-        srcPts = MatOfPoint2f(tl, tr, br, bl)
-        dstPts = MatOfPoint2f(
+        // H maps unit square (world plane) → image corners.
+        // This is the correct direction for decomposition: H = K * [r1 r2 t]
+        // so K_inv * H = [r1 r2 t].
+        val squarePts = MatOfPoint2f(
             Point(0.0, 0.0),
             Point(dstSize - 1.0, 0.0),
             Point(dstSize - 1.0, dstSize - 1.0),
             Point(0.0, dstSize - 1.0)
         )
+        val imagePts = MatOfPoint2f(tl, tr, br, bl)
+
+        srcPts = squarePts
+        dstPts = imagePts
 
         H = Imgproc.getPerspectiveTransform(srcPts, dstPts)
 
-        // Build camera matrix K
+        // Build camera matrix K from (already scaled/rotated) intrinsics
         K = Mat.zeros(3, 3, CvType.CV_64FC1)
         K.put(0, 0, intrinsics.fx)
         K.put(1, 1, intrinsics.fy)
@@ -232,7 +312,6 @@ fun projectiveAspectRatio(corners: List<Point>, intrinsics: CameraIntrinsics): D
         K.put(1, 2, intrinsics.cy)
         K.put(2, 2, 1.0)
 
-        // K_inv
         Kinv = Mat()
         Core.invert(K, Kinv)
 
@@ -240,7 +319,7 @@ fun projectiveAspectRatio(corners: List<Point>, intrinsics: CameraIntrinsics): D
         M = Mat()
         Core.gemm(Kinv, H, 1.0, Mat(), 0.0, M)
 
-        // Extract columns r1 (col 0) and r2 (col 1)
+        // Extract rotation columns r1 (col 0) and r2 (col 1)
         val r1 = doubleArrayOf(M.get(0, 0)[0], M.get(1, 0)[0], M.get(2, 0)[0])
         val r2 = doubleArrayOf(M.get(0, 1)[0], M.get(1, 1)[0], M.get(2, 1)[0])
 
@@ -249,19 +328,32 @@ fun projectiveAspectRatio(corners: List<Point>, intrinsics: CameraIntrinsics): D
 
         if (normR1 <= 0.0 || normR2 <= 0.0) return null
 
-        // ||r1||/||r2|| is the aspect ratio of the destination rectangle that would
-        // make H consistent with a rotation. Since destination is square (1:1),
+        // Sanity check: rotation columns should have similar norms.
+        // A ratio outside [0.2, 5.0] indicates a degenerate decomposition.
+        val normRatio = normR1 / normR2
+        if (normRatio < 0.2 || normRatio > 5.0) {
+            Log.d(TAG, "projectiveAspectRatio: degenerate decomposition normR1=%.4f, normR2=%.4f, ratio=%.4f".format(
+                normR1, normR2, normRatio))
+            return null
+        }
+
+        // Orthogonality check: r1 · r2 should be ~0 for valid rotation columns
+        val dot = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2]
+        val dotNormalized = abs(dot) / (normR1 * normR2)
+        if (dotNormalized > 0.3) {
+            Log.d(TAG, "projectiveAspectRatio: poor orthogonality dot=%.4f".format(dotNormalized))
+            return null
+        }
+
+        // ||r1||/||r2|| is the aspect ratio correction. Since destination is square,
         // the true document width:height = ||r1||/||r2||.
         val projRatio = normR1 / normR2
-
-        // Convert to min/max ratio (always <= 1.0)
         val aspectRatio = min(projRatio, 1.0 / projRatio)
 
-        // Sanity check: reject wildly unreasonable ratios
         if (aspectRatio < 0.05 || aspectRatio > 1.0) return null
 
-        Log.d(TAG, "projectiveAspectRatio: normR1=%.4f, normR2=%.4f, ratio=%.4f".format(
-            normR1, normR2, aspectRatio))
+        Log.d(TAG, "projectiveAspectRatio: normR1=%.4f, normR2=%.4f, dot=%.4f, ratio=%.4f".format(
+            normR1, normR2, dotNormalized, aspectRatio))
         return aspectRatio
     } catch (e: Exception) {
         Log.w(TAG, "projectiveAspectRatio failed: ${e.message}")
@@ -314,44 +406,59 @@ fun estimateAspectRatioDualRegime(
     val severity = perspectiveSeverity(corners)
     Log.d(TAG, "perspectiveSeverity: %.1f deg".format(severity))
 
+    // Estimation confidence based on regime: angular correction is reliable for
+    // low severity (~2% error validated on device). Projective path uses intrinsics
+    // with H in world→image direction and sanity checks on decomposition.
+    val estConf: Double
     val dualRatio: Double = when {
         severity < SEVERITY_LOW_THRESHOLD -> {
-            // Low severity: angular correction is sufficient
+            // Low severity: angular correction is sufficient and reliable
+            estConf = 0.85
             angularCorrectedRatio(corners)
         }
         severity > SEVERITY_HIGH_THRESHOLD -> {
             // High severity: prefer projective if intrinsics available
             if (intrinsics != null) {
-                projectiveAspectRatio(corners, intrinsics)
-                    ?: angularCorrectedRatio(corners) // fallback if projective fails
+                val proj = projectiveAspectRatio(corners, intrinsics)
+                if (proj != null) {
+                    estConf = 0.75
+                    proj
+                } else {
+                    estConf = 0.4 // fallback angular at high severity is unreliable
+                    angularCorrectedRatio(corners)
+                }
             } else {
+                estConf = 0.4
                 angularCorrectedRatio(corners)
             }
         }
         else -> {
-            // Transition zone: weighted blend
+            // Transition zone (15-20 deg): weighted blend
             val angularRatio = angularCorrectedRatio(corners)
             if (intrinsics != null) {
                 val projectiveRatio = projectiveAspectRatio(corners, intrinsics)
                 if (projectiveRatio != null) {
                     val weight = (severity - SEVERITY_LOW_THRESHOLD) /
                         (SEVERITY_HIGH_THRESHOLD - SEVERITY_LOW_THRESHOLD)
+                    estConf = 0.85 * (1.0 - weight) + 0.75 * weight
                     angularRatio * (1.0 - weight) + projectiveRatio * weight
                 } else {
+                    estConf = 0.7
                     angularRatio
                 }
             } else {
+                estConf = 0.7
                 angularRatio
             }
         }
     }
 
-    // Apply format snapping to the dual-regime ratio
+    // Apply format snapping to the dual-regime ratio, carry estimation confidence
     return snapToFormat(
         ratio = dualRatio,
         corners = corners,
         intrinsics = intrinsics
-    )
+    ).copy(estimationConfidence = estConf)
 }
 
 /**
@@ -378,7 +485,8 @@ private fun snapToFormat(
         return AspectRatioEstimate(
             estimatedRatio = ratio,
             matchedFormat = null,
-            confidence = 0.5
+            confidence = 0.5,
+            rawRatio = ratio
         )
     }
 
@@ -389,7 +497,8 @@ private fun snapToFormat(
         return AspectRatioEstimate(
             estimatedRatio = best.format.ratio,
             matchedFormat = best.format,
-            confidence = conf.coerceIn(0.0, 1.0)
+            confidence = conf.coerceIn(0.0, 1.0),
+            rawRatio = ratio
         )
     }
 
@@ -409,7 +518,8 @@ private fun snapToFormat(
             estimatedRatio = bestCandidate.format.ratio,
             matchedFormat = bestCandidate.format,
             confidence = conf.coerceIn(0.0, 1.0),
-            verifiedByHomography = true
+            verifiedByHomography = true,
+            rawRatio = ratio
         )
     }
 
@@ -419,7 +529,8 @@ private fun snapToFormat(
     return AspectRatioEstimate(
         estimatedRatio = best.format.ratio,
         matchedFormat = best.format,
-        confidence = conf.coerceIn(0.0, 1.0) * 0.8
+        confidence = conf.coerceIn(0.0, 1.0) * 0.8,
+        rawRatio = ratio
     )
 }
 

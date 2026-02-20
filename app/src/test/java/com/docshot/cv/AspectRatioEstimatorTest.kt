@@ -132,13 +132,12 @@ class AspectRatioEstimatorTest {
     }
 
     @Test
-    fun `estimateAspectRatio snaps to Receipt for 1_3 quad`() {
-        // Receipt: 1:3 ratio
+    fun `estimateAspectRatio returns custom for 1_3 quad`() {
+        // 1:3 ratio — no matching known format
         val corners = makeRect(80.0, 240.0)
         val estimate = estimateAspectRatio(corners)
 
-        assertNotNull("Should match a format", estimate.matchedFormat)
-        assertEquals("Receipt", estimate.matchedFormat!!.name)
+        assertNull("Should not match any format (Receipt removed)", estimate.matchedFormat)
     }
 
     @Test
@@ -722,9 +721,7 @@ class AspectRatioEstimatorTest {
 
     @Test
     fun `formatSnap_ratio0_71_snapsToA4`() {
-        // Ratio 0.71 is within SNAP_THRESHOLD (0.06) of A4 (0.707)
-        // Build a rectangle whose raw ratio is ~0.71
-        // ratio = min/max = w/h => w = 0.71 * h
+        // Ratio 0.71 is within SNAP_THRESHOLD (0.035) of A4 (0.707)
         val h = 1000.0
         val w = h * 0.71
         val corners = makeRect(w, h)
@@ -739,7 +736,7 @@ class AspectRatioEstimatorTest {
 
     @Test
     fun `formatSnap_ratio0_78_snapsToUSLetter`() {
-        // Ratio 0.78 is within SNAP_THRESHOLD (0.06) of US Letter (0.773)
+        // Ratio 0.78 is within SNAP_THRESHOLD (0.035) of US Letter (0.773)
         val h = 1000.0
         val w = h * 0.78
         val corners = makeRect(w, h)
@@ -754,9 +751,8 @@ class AspectRatioEstimatorTest {
 
     @Test
     fun `formatSnap_ratio0_50_noSnap`() {
-        // Ratio 0.50 is not within SNAP_THRESHOLD of any known format:
-        // - Business Card: 0.571 -> distance 0.071 > 0.06
-        // - Receipt: 0.333 -> distance 0.167 > 0.06
+        // Ratio 0.50 is not within SNAP_THRESHOLD (0.035) of any known format:
+        // Nearest is ID Card at 0.631 -> distance 0.131 > 0.035
         val h = 1000.0
         val w = h * 0.50
         val corners = makeRect(w, h)
@@ -770,19 +766,17 @@ class AspectRatioEstimatorTest {
 
     @Test
     fun `formatSnap_exactBoundary_A4plusThreshold`() {
-        // A4 ratio is 0.707, SNAP_THRESHOLD is 0.06
-        // Ratio exactly at 0.707 + 0.06 = 0.767 should still snap
+        // A4 ratio is 0.707, SNAP_THRESHOLD is 0.035
+        // Ratio at 0.740 is within 0.035 of A4 (0.033) and US Letter (0.033)
+        // Ratio at 0.770 should snap to US Letter (distance 0.003)
         val h = 1000.0
-        val w = h * 0.767
+        val w = h * 0.770
         val corners = makeRect(w, h)
         val estimate = estimateAspectRatio(corners)
 
-        // At 0.767, distance to A4 (0.707) = 0.060 (at boundary),
-        // distance to US Letter (0.773) = 0.006 (much closer)
-        // Should snap to US Letter since it's closer
         assertNotNull("Should match some format at boundary", estimate.matchedFormat)
         assertEquals(
-            "At ratio 0.767, US Letter (0.773) is closer than A4 (0.707)",
+            "At ratio 0.770, US Letter (0.773) is closest",
             "US Letter", estimate.matchedFormat!!.name
         )
     }
@@ -790,8 +784,7 @@ class AspectRatioEstimatorTest {
     @Test
     fun `formatSnap_exactBoundary_justOutsideAllFormats`() {
         // Ratio 0.45 is far from all formats:
-        // - Business Card: 0.571 -> distance 0.121 > 0.06
-        // - Receipt: 0.333 -> distance 0.117 > 0.06
+        // Nearest is ID Card at 0.631 -> distance 0.181 > 0.035
         val h = 1000.0
         val w = h * 0.45
         val corners = makeRect(w, h)
@@ -816,15 +809,14 @@ class AspectRatioEstimatorTest {
     }
 
     @Test
-    fun `formatSnap_BusinessCard_snapsCorrectly`() {
-        // Business Card ratio: 1.0 / 1.75 = 0.571
+    fun `formatSnap_0571ratio_returnsCustom`() {
+        // 0.571 ratio — Business Card removed, no matching format
         val h = 1000.0
         val w = h * 0.571
         val corners = makeRect(w, h)
         val estimate = estimateAspectRatio(corners)
 
-        assertNotNull("Should match Business Card format", estimate.matchedFormat)
-        assertEquals("Business Card", estimate.matchedFormat!!.name)
+        assertNull("Should not match any format (Business Card removed)", estimate.matchedFormat)
     }
 
     @Test
@@ -999,8 +991,6 @@ class AspectRatioEstimatorTest {
         assertTrue("Should contain A4", "A4" in names)
         assertTrue("Should contain US Letter", "US Letter" in names)
         assertTrue("Should contain ID Card", "ID Card" in names)
-        assertTrue("Should contain Business Card", "Business Card" in names)
-        assertTrue("Should contain Receipt", "Receipt" in names)
         assertTrue("Should contain Square", "Square" in names)
     }
 

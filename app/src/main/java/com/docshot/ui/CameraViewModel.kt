@@ -97,9 +97,11 @@ data class CaptureResultData(
     val cameraIntrinsics: CameraIntrinsics? = null,
     val autoRotationSteps: Int = 0,  // 0-3: auto-orientation from detectAndCorrect
     val manualRotationSteps: Int = 0,  // 0-3: additional manual rotations by user
-    /** Multi-frame estimated aspect ratio (min/max, <= 1.0) from stabilization window.
-     *  Non-null only when confidence >= 0.7. Used by ResultScreen as initial ratio. */
-    val estimatedAspectRatio: Float? = null
+    /** Estimated aspect ratio (min/max, <= 1.0) used as initial slider value.
+     *  Non-null only when estimation confidence >= 0.5. */
+    val estimatedAspectRatio: Float? = null,
+    /** Raw estimated ratio before confidence gating, for debug display. Always set when estimation runs. */
+    val rawEstimatedRatio: Float? = null
 )
 
 class CameraViewModel : ViewModel() {
@@ -146,6 +148,8 @@ class CameraViewModel : ViewModel() {
 
     /** Camera intrinsics for homography-based aspect ratio verification. */
     private var _cameraIntrinsics: CameraIntrinsics? = null
+    /** Last capture rotation (sensor→display), used for intrinsics scaling. */
+    private var _lastCaptureRotation: Int = 90
 
     /**
      * Latest multi-frame aspect ratio estimate from the stabilization window.
@@ -313,6 +317,8 @@ class CameraViewModel : ViewModel() {
                     viewModelScope.launch(Dispatchers.Default) {
                         _cameraState.value = CameraUiState.Processing("Processing document...")
                         try {
+                            val captureRotation = imageProxy.imageInfo.rotationDegrees
+                            _lastCaptureRotation = captureRotation
                             val result = processCapture(imageProxy, previewCorners, previewConfidence)
                             imageProxy.close()
 
@@ -325,19 +331,23 @@ class CameraViewModel : ViewModel() {
                                         result.originalBitmap.width,
                                         result.originalBitmap.height
                                     )
-                                    // Estimate aspect ratio: single-frame on capture corners
-                                    // (full-res, intrinsics match sensor coordinate system)
-                                    val singleFrameEst = estimateAspectRatio(
-                                        result.corners, _cameraIntrinsics
+                                    // Scale intrinsics from sensor coords to capture frame coords
+                                    val frameW = result.originalBitmap.width
+                                    val frameH = result.originalBitmap.height
+                                    val captureIntrinsics = _cameraIntrinsics?.forCaptureFrame(
+                                        frameW, frameH, captureRotation
                                     )
-                                    val estimatedAR = if (singleFrameEst.confidence >= 0.5) {
-                                        Log.d(TAG, "Single-frame AR: ratio=%.4f, confidence=%.2f, format=%s — using as initial".format(
-                                            singleFrameEst.estimatedRatio, singleFrameEst.confidence,
-                                            singleFrameEst.matchedFormat?.name ?: "custom"))
+                                    val singleFrameEst = estimateAspectRatio(
+                                        result.corners, captureIntrinsics
+                                    )
+                                    val estimatedAR = if (singleFrameEst.estimationConfidence >= 0.5) {
+                                        Log.d(TAG, "Single-frame AR: ratio=%.4f, estConf=%.2f, snapConf=%.2f, format=%s — using as initial".format(
+                                            singleFrameEst.estimatedRatio, singleFrameEst.estimationConfidence,
+                                            singleFrameEst.confidence, singleFrameEst.matchedFormat?.name ?: "custom"))
                                         singleFrameEst.estimatedRatio.toFloat()
                                     } else {
-                                        Log.d(TAG, "Single-frame AR: low confidence (%.2f) — falling back to default".format(
-                                            singleFrameEst.confidence))
+                                        Log.d(TAG, "Single-frame AR: low estConf (%.2f) — falling back to default".format(
+                                            singleFrameEst.estimationConfidence))
                                         null
                                     }
                                     _cameraState.value = CameraUiState.Result(
@@ -350,7 +360,8 @@ class CameraViewModel : ViewModel() {
                                             normalizedCorners = normCorners,
                                             cameraIntrinsics = _cameraIntrinsics,
                                             autoRotationSteps = result.autoRotationSteps,
-                                            estimatedAspectRatio = estimatedAR
+                                            estimatedAspectRatio = estimatedAR,
+                                            rawEstimatedRatio = singleFrameEst.rawRatio.toFloat()
                                         )
                                     )
                                 } else {
@@ -482,9 +493,12 @@ class CameraViewModel : ViewModel() {
                     com.docshot.cv.DocumentOrientation.ROTATE_180 -> 2
                     com.docshot.cv.DocumentOrientation.ROTATE_270 -> 3
                 }
-                // Single-frame AR estimation from adjusted corners
-                val sfEstimate = estimateAspectRatio(adjustedCorners, _cameraIntrinsics)
-                val estimatedAR = if (sfEstimate.confidence >= 0.5) {
+                // Single-frame AR estimation from adjusted corners (scale intrinsics to frame)
+                val lcIntrinsics = _cameraIntrinsics?.forCaptureFrame(
+                    originalBitmap.width, originalBitmap.height, _lastCaptureRotation
+                )
+                val sfEstimate = estimateAspectRatio(adjustedCorners, lcIntrinsics)
+                val estimatedAR = if (sfEstimate.estimationConfidence >= 0.5) {
                     sfEstimate.estimatedRatio.toFloat()
                 } else {
                     null
@@ -499,7 +513,8 @@ class CameraViewModel : ViewModel() {
                         normalizedCorners = normCorners,
                         cameraIntrinsics = _cameraIntrinsics,
                         autoRotationSteps = autoSteps,
-                        estimatedAspectRatio = estimatedAR
+                        estimatedAspectRatio = estimatedAR,
+                        rawEstimatedRatio = sfEstimate.rawRatio.toFloat()
                     )
                 )
             } catch (e: Exception) {

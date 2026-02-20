@@ -53,10 +53,10 @@ app/src/main/java/com/docshot/
 └── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
-## Current State (v1.2.0)
+## Current State (v1.2.1)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.0 complete (including C4 on-device validation).** KLT corner tracking (WP-A) + dual-regime aspect ratio estimation (WP-B) + integration/polish (WP-C). Post-v1.2.0 hotfixes: KLT confidence carry-forward (auto-capture was broken — KLT frames injected 0.0 confidence), switched to single-frame AR estimation at capture time (multi-frame Zhang degenerate during stabilization). ~124 unit tests + 27 instrumented. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+- **v1.2.1 complete.** Fixed projective decomposition (H direction + intrinsics scaling) and angular correction (dimension-independent). Lowered severity thresholds (5/10 deg) so projective kicks in earlier. Separated estimation confidence from snap confidence. Robust orientation-invariant AR estimation validated on S21. See [PROJECT.md](PROJECT.md) for roadmap.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
 
 ## Key Architecture Details (for current work)
@@ -68,12 +68,15 @@ app/src/main/java/com/docshot/
 - `CaptureProcessor`: re-detects on full-res capture frame, validates against preview corners (5% drift tolerance)
 
 ### Aspect Ratio (single-frame dual-regime)
-- `AspectRatioEstimator`: dual-regime estimation — angular correction (<15deg severity) + projective decomposition (>20deg) + transition blending (15-20deg). Format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography error disambiguation when intrinsics available
-- Camera intrinsics: `LENS_INTRINSIC_CALIBRATION` (API 28+) or sensor-size fallback
-- AR estimated at capture time from full-res corners + intrinsics (single-frame). Validated on 11x22cm letter: estimates within 2% of true ratio (0.500)
-- `MultiFrameAspectEstimator` exists but accumulation disabled — Zhang's method is degenerate during stabilization (camera stationary → near-identical homographies → garbage SVD). Code preserved for future revisit with proper intrinsics scaling + H direction fix
-- ResultScreen initial ratio: locked ratio (priority) > single-frame estimate (conf >= 0.5, if auto-estimate enabled) > A4 fallback (0.707). Format label shows "(auto)" suffix when auto-estimated. Slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
-- Gallery imports use single-frame dual-regime estimation (angular correction)
+- `AspectRatioEstimator`: dual-regime estimation — angular correction (<5deg severity) + projective decomposition (>10deg) + transition blending (5-10deg). Format snapping (A4, US Letter, ID Card, Square) with SNAP_THRESHOLD=0.035, SNAP_SIGMA=0.025 + homography error disambiguation when intrinsics available
+- Camera intrinsics: `LENS_INTRINSIC_CALIBRATION` (API 28+) or sensor-size fallback. `CameraIntrinsics.forCaptureFrame()` handles rotation-aware scaling from sensor coords to capture frame coords (fx/fy and cx/cy swap on 90/270 rotation)
+- Projective path: `H = getPerspectiveTransform(square → corners)` (world→image direction), `M = K_inv * H = [r1 r2 t]`, ratio = `||r1||/||r2||` with sanity checks (norm ratio in [0.2, 5.0], orthogonality dot < 0.3)
+- Angular path: corrects each dimension independently (`trueH = sideH / cos(alphaV/2)`, `trueV = sideV / cos(alphaH/2)`), orientation-invariant
+- Estimation confidence (0.85 angular, 0.75 projective with intrinsics, 0.4 fallback) separate from format snap confidence
+- AR estimated at capture time from full-res corners + intrinsics (single-frame). Validated on S21: robust at all orientations, envelope (0.5 true) estimated at 0.497
+- `MultiFrameAspectEstimator` exists but accumulation disabled — Zhang's method is degenerate during stabilization (camera stationary → near-identical homographies → garbage SVD). Code preserved for future revisit
+- ResultScreen initial ratio: locked ratio (priority) > single-frame estimate (estConf >= 0.5, if auto-estimate enabled) > A4 fallback (0.707). Format label shows "(auto)" suffix when auto-estimated, debug info shows raw and slider ratios. Slider 0.25-1.0 with 300ms debounce re-warp, two-row layout (lock+label / full-width slider), aspect ratio lock persisted in DataStore
+- Gallery imports use single-frame dual-regime estimation
 - Settings toggle: "Aspect ratio default" — Auto (estimated) vs Always A4, persisted in DataStore
 
 ### Confidence Thresholds

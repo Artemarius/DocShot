@@ -539,17 +539,23 @@ private fun extractCameraIntrinsics(
         val camera2Info = Camera2CameraInfo.from(camera.cameraInfo)
         val chars = camera2Info.getCameraCharacteristic(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
 
+        val pixelArray = camera2Info.getCameraCharacteristic(
+            CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE
+        )
+
         if (chars != null && chars.size >= 4) {
             // LENS_INTRINSIC_CALIBRATION: [fx, fy, cx, cy, s]
             val intrinsics = CameraIntrinsics(
                 fx = chars[0].toDouble(),
                 fy = chars[1].toDouble(),
                 cx = chars[2].toDouble(),
-                cy = chars[3].toDouble()
+                cy = chars[3].toDouble(),
+                sensorWidth = pixelArray?.width ?: 0,
+                sensorHeight = pixelArray?.height ?: 0
             )
             viewModel.setCameraIntrinsics(intrinsics)
-            Log.d(TAG, "Camera intrinsics from LENS_INTRINSIC_CALIBRATION: fx=%.1f fy=%.1f".format(
-                intrinsics.fx, intrinsics.fy))
+            Log.d(TAG, "Camera intrinsics from LENS_INTRINSIC_CALIBRATION: fx=%.1f fy=%.1f sensor=%dx%d".format(
+                intrinsics.fx, intrinsics.fy, intrinsics.sensorWidth, intrinsics.sensorHeight))
             return
         }
 
@@ -559,9 +565,6 @@ private fun extractCameraIntrinsics(
         )
         val sensorSize = camera2Info.getCameraCharacteristic(
             CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE
-        )
-        val pixelArray = camera2Info.getCameraCharacteristic(
-            CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE
         )
 
         if (focalLengths != null && focalLengths.isNotEmpty() && sensorSize != null && pixelArray != null) {
@@ -576,9 +579,13 @@ private fun extractCameraIntrinsics(
             val cx = pixelW / 2.0
             val cy = pixelH / 2.0
 
-            val intrinsics = CameraIntrinsics(fx = fx, fy = fy, cx = cx, cy = cy)
+            val intrinsics = CameraIntrinsics(
+                fx = fx, fy = fy, cx = cx, cy = cy,
+                sensorWidth = pixelArray.width, sensorHeight = pixelArray.height
+            )
             viewModel.setCameraIntrinsics(intrinsics)
-            Log.d(TAG, "Camera intrinsics from sensor size: fx=%.1f fy=%.1f".format(fx, fy))
+            Log.d(TAG, "Camera intrinsics from sensor size: fx=%.1f fy=%.1f sensor=%dx%d".format(
+                fx, fy, pixelArray.width, pixelArray.height))
         } else {
             Log.d(TAG, "Could not extract camera intrinsics — aspect ratio estimation will use distance-only snapping")
         }

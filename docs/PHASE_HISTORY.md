@@ -21,6 +21,7 @@
 | v1.1.0 | UX Polish (flash, A4 default, AR lock) | Complete | — |
 | v1.1.2 | No-Camera Fallback | Complete | — |
 | v1.2.0 | KLT Tracking + Aspect Ratio Recovery | Complete | ~124 unit + 27 instrumented = ~151 |
+| v1.2.1 | AR Estimation Fixes & Robustness | Complete | ~124 unit + 27 instrumented = ~151 |
 
 ---
 
@@ -282,6 +283,26 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - Single-file change (`CameraScreen.kt`): added `previewViewRef` state, `frozenPreviewBitmap` snapshot, `frozenPreviewBitmap` parameter on `QuadOverlay`, `clipPath`+`drawImage` in Canvas
 - No ViewModel modifications, no new tests (pure UI composable change)
 - Graceful fallback: if `getBitmap()` returns null (preview not ready), overlay renders as before (cyan fill only)
+
+---
+
+## v1.2.1: AR Estimation Fixes & Robustness
+
+**Goal:** Fix broken projective decomposition and angular correction paths, make aspect ratio estimation robust at all document orientations and viewing angles.
+
+**Fixes:**
+
+- **Projective decomposition (critical):** Two bugs — (1) H direction was inverted (image→world instead of world→image), producing near-zero rotation column norms (~0.0003). Fixed: `getPerspectiveTransform(square → corners)` (world→image). (2) Camera intrinsics not scaled from sensor-native landscape coords (4032x3024 on S21) to capture frame coords (3024x4032 portrait). Fixed: `CameraIntrinsics.forCaptureFrame()` with rotation-aware fx/fy and cx/cy swapping. Added sanity checks: norm ratio in [0.2, 5.0], orthogonality dot product < 0.3.
+- **Angular correction (orientation bias):** `rawRatio = min/max` lost track of which dimension is horizontal vs vertical, then applied `cos(alphaV/2)/cos(alphaH/2)` correction that assumed a fixed relationship. Fixed: correct each dimension independently (`trueH = sideH / cos(alphaV/2)`, `trueV = sideV / cos(alphaH/2)`), then take min/max. Now orientation-invariant.
+- **Severity thresholds lowered:** 15/20 deg → 5/10 deg so projective decomposition kicks in earlier (most real-world captures are 10-25 deg).
+- **Estimation confidence separated from snap confidence:** New `estimationConfidence` field based on severity regime (0.85 angular, 0.75 projective with intrinsics, 0.4 fallback). Previously used format-snap Gaussian distance as confidence, which dropped below threshold for valid custom ratios → A4 fallback.
+- **Format list simplified:** Removed Business Card (0.571) and Receipt (0.600) — too close to common custom ratios, caused aggressive false snapping. Tightened SNAP_THRESHOLD from 0.06 to 0.035, SNAP_SIGMA from 0.04 to 0.025.
+- **Raw ratio tracking:** Added `rawRatio` field to `AspectRatioEstimate` (pre-snap value) and `rawEstimatedRatio` to `CaptureResultData`. Debug label shows `[raw X | slider Y]`.
+- **ResultScreen UI:** Split aspect ratio controls into two rows — row 1: lock button + format label (11sp); row 2: full-width slider. Previously slider was cramped.
+
+**Validation:** Tested on S21 with 11x22cm envelope (true ratio 0.50). Projective path produces 0.497 at 18.4 deg severity. Robust across portrait, landscape, and angled orientations.
+
+**Files changed:** `AspectRatioEstimator.kt`, `CameraScreen.kt`, `CameraViewModel.kt`, `GalleryViewModel.kt`, `ResultScreen.kt`, `AspectRatioEstimatorTest.kt`
 
 ---
 

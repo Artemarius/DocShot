@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -130,13 +131,16 @@ fun ResultScreen(
         mutableFloatStateOf(defaultRatio)
     }
 
-    // Reactive format label: updates as slider moves, appends "(auto)" when auto-estimated
-    val currentFormatLabel = remember(currentRatio, wasAutoEstimated, userAdjustedRatio) {
+    // Reactive format label: shows format name + raw/slider ratios for debugging
+    val currentFormatLabel = remember(currentRatio, wasAutoEstimated, userAdjustedRatio, data.rawEstimatedRatio, data.estimatedAspectRatio) {
         val baseName = KNOWN_FORMATS
             .filter { abs(currentRatio - it.ratio.toFloat()) <= FORMAT_SNAP_THRESHOLD }
             .minByOrNull { abs(currentRatio - it.ratio.toFloat()) }
             ?.name ?: "Custom"
-        if (wasAutoEstimated && !userAdjustedRatio) "$baseName (auto)" else baseName
+        val autoSuffix = if (wasAutoEstimated && !userAdjustedRatio) " (auto)" else ""
+        val rawVal = data.rawEstimatedRatio?.let { "%.3f".format(it) } ?: "—"
+        val sliderVal = "%.3f".format(currentRatio)
+        "$baseName$autoSuffix  [raw $rawVal | slider $sliderVal]"
     }
 
     // Format dropdown state
@@ -256,75 +260,79 @@ fun ResultScreen(
             )
         }
 
-        // Aspect ratio: lock button + clickable format label (dropdown) + slider
+        // Aspect ratio: row 1 = lock + format label + ratios, row 2 = full-width slider
         AnimatedVisibility(visible = showRectified && data.corners.isNotEmpty()) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp)
             ) {
-                // Lock/unlock aspect ratio button
-                IconButton(
-                    onClick = {
-                        onToggleAspectRatioLock(!isAspectRatioLocked, currentRatio)
-                    },
-                    modifier = Modifier.size(32.dp)
+                // Row 1: lock button + format label (dropdown) + ratio values
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = if (isAspectRatioLocked) Icons.Filled.Lock
-                            else Icons.Filled.LockOpen,
-                        contentDescription = if (isAspectRatioLocked) "Unlock aspect ratio"
-                            else "Lock aspect ratio",
-                        modifier = Modifier.size(18.dp),
-                        tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                // Clickable format label with dropdown
-                Box {
-                    Row(
-                        modifier = Modifier.clickable(enabled = !isAspectRatioLocked) {
-                            showFormatMenu = true
+                    IconButton(
+                        onClick = {
+                            onToggleAspectRatioLock(!isAspectRatioLocked, currentRatio)
                         },
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.size(24.dp)
                     ) {
-                        Text(
-                            text = currentFormatLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
-                                else MaterialTheme.colorScheme.primary
-                        )
                         Icon(
-                            imageVector = Icons.Filled.ArrowDropDown,
-                            contentDescription = "Select format",
-                            modifier = Modifier.size(16.dp),
-                            tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
-                                else MaterialTheme.colorScheme.primary
+                            imageVector = if (isAspectRatioLocked) Icons.Filled.Lock
+                                else Icons.Filled.LockOpen,
+                            contentDescription = if (isAspectRatioLocked) "Unlock aspect ratio"
+                                else "Lock aspect ratio",
+                            modifier = Modifier.size(14.dp),
+                            tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    DropdownMenu(
-                        expanded = showFormatMenu,
-                        onDismissRequest = { showFormatMenu = false }
-                    ) {
-                        KNOWN_FORMATS.forEach { format ->
-                            DropdownMenuItem(
-                                text = { Text(format.name) },
-                                onClick = {
-                                    currentRatio = format.ratio.toFloat()
-                                    pendingRatio = currentRatio
-                                    userAdjustedRatio = true
-                                    showFormatMenu = false
-                                }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    Box {
+                        Row(
+                            modifier = Modifier.clickable(enabled = !isAspectRatioLocked) {
+                                showFormatMenu = true
+                            },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = currentFormatLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 11.sp,
+                                color = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
+                                    else MaterialTheme.colorScheme.primary
                             )
+                            Icon(
+                                imageVector = Icons.Filled.ArrowDropDown,
+                                contentDescription = "Select format",
+                                modifier = Modifier.size(14.dp),
+                                tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
+                                    else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showFormatMenu,
+                            onDismissRequest = { showFormatMenu = false }
+                        ) {
+                            KNOWN_FORMATS.forEach { format ->
+                                DropdownMenuItem(
+                                    text = { Text(format.name) },
+                                    onClick = {
+                                        currentRatio = format.ratio.toFloat()
+                                        pendingRatio = currentRatio
+                                        userAdjustedRatio = true
+                                        showFormatMenu = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                // Slider fills remaining space (disabled when locked)
+                // Row 2: full-width slider
                 Slider(
                     value = currentRatio,
                     onValueChange = {
@@ -334,7 +342,7 @@ fun ResultScreen(
                     onValueChangeFinished = { pendingRatio = currentRatio },
                     valueRange = 0.25f..1.0f,
                     enabled = !isAspectRatioLocked,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
