@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#003738"/>
+      <stop offset="1" stop-color="#004F50"/>
+    </linearGradient>
+    <clipPath id="circle">
+      <circle cx="54" cy="54" r="50"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background gradient -->
+  <rect width="108" height="108" fill="url(#bg)"/>
+
+  <!-- Clip to circle for Play Store icon style -->
+  <g clip-path="url(#circle)">
+    <!-- Background again inside clip -->
+    <rect width="108" height="108" fill="url(#bg)"/>
+
+    <!-- Document body: white trapezoid -->
+    <path d="M36,28 L68,28 L72,80 L32,80 Z" fill="#FFFFFF"/>
+
+    <!-- Corner fold triangle (top-right) -->
+    <path d="M60,28 L68,28 L68,36 Z" fill="#B2EBF2"/>
+
+    <!-- Fold crease line -->
+    <line x1="60" y1="28" x2="68" y2="36" stroke="#80DEEA" stroke-width="0.5"/>
+
+    <!-- Scan-line accent -->
+    <line x1="35" y1="54" x2="69" y2="54" stroke="#4DD0E1" stroke-width="1.5" stroke-linecap="round"/>
+
+    <!-- Text-suggestion lines above scan line -->
+    <line x1="37" y1="40" x2="57" y2="40" stroke="#80DEEA" stroke-width="1" stroke-linecap="round"/>
+    <line x1="37" y1="45" x2="62" y2="45" stroke="#80DEEA" stroke-width="1" stroke-linecap="round"/>
+    <line x1="37" y1="50" x2="55" y2="50" stroke="#80DEEA" stroke-width="1" stroke-linecap="round"/>
+
+    <!-- Text lines below scan line -->
+    <line x1="36" y1="60" x2="64" y2="60" stroke="#80DEEA" stroke-width="1" stroke-linecap="round"/>
+    <line x1="36" y1="65" x2="60" y2="65" stroke="#80DEEA" stroke-width="1" stroke-linecap="round"/>
+    <line x1="35" y1="70" x2="66" y2="70" stroke="#80DEEA" stroke-width="1" stroke-linecap="round"/>
+  </g>
+</svg>
