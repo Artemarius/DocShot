@@ -58,6 +58,7 @@ app/src/main/java/com/docshot/
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
 - **v1.2.1 complete.** Fixed projective decomposition (H direction + intrinsics scaling) and angular correction (dimension-independent). Lowered severity thresholds (5/10 deg) so projective kicks in earlier. Separated estimation confidence from snap confidence. Robust orientation-invariant AR estimation validated on S21. See [PROJECT.md](PROJECT.md) for roadmap.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
+- **Next (v1.2.2):** Manual capture path — always allow shutter tap even when no quad detected, manual corner placement/adjustment. See [PROJECT.md](PROJECT.md).
 
 ## Key Architecture Details (for current work)
 
