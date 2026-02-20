@@ -53,6 +53,9 @@ class FrameAnalyzer(
     /** Number of consecutive frames with no valid detection (confidence < threshold). */
     private var consecutiveMisses = 0
 
+    /** Last detection confidence, carried forward for KLT-only frames. */
+    private var lastDetectionConfidence = 0.0
+
     /** Frame counter for skip logic (resets when detection found). */
     private var frameCounter = 0
 
@@ -67,6 +70,7 @@ class FrameAnalyzer(
         prevStabilityProgress = 0f
         consecutiveMisses = 0
         frameCounter = 0
+        lastDetectionConfidence = 0.0
         lastResult = null
     }
 
@@ -143,7 +147,11 @@ class FrameAnalyzer(
             val trackedCorners = trackingResult.corners?.map { pt ->
                 Point(pt.x * scaleFactor, pt.y * scaleFactor)
             }
-            val trackedConfidence = detection?.confidence ?: 0.0
+            // Carry forward last detection confidence for KLT-only frames.
+            // Without this, KLT frames inject 0.0 into the smoother's confidence
+            // buffer, dragging the average below the auto-capture threshold.
+            if (detection != null) lastDetectionConfidence = detection.confidence
+            val trackedConfidence = if (trackingResult.isTracked) lastDetectionConfidence else (detection?.confidence ?: 0.0)
 
             // Update consecutive miss counter for adaptive frame skipping.
             // A tracked frame counts as a "hit" to prevent skip-tier escalation.
@@ -161,24 +169,11 @@ class FrameAnalyzer(
                 isTracked = trackingResult.isTracked
             )
 
-            // Multi-frame aspect ratio accumulation during stabilization window.
-            // Feed KLT-tracked corners into the estimator while the smoother is
-            // counting toward stability (progress > 0). Reset the estimator when
-            // stability drops (quad lost, drift, scene change).
+            // Multi-frame AR accumulation disabled — Zhang's method produces garbage
+            // during stabilization (near-identical viewpoints → degenerate SVD). Single-frame
+            // estimation on capture corners is more reliable. See commit history for the
+            // accumulation code if multi-frame is revisited with proper intrinsics scaling.
             val currentProgress = smoother.stabilityProgress
-            if (currentProgress < prevStabilityProgress && currentProgress == 0f) {
-                // Stability was reset — clear accumulated frames
-                multiFrameEstimator.reset()
-            }
-            if (trackingResult.isTracked
-                && trackedCorners != null
-                && currentProgress > 0f
-                && !smoother.isStable
-            ) {
-                multiFrameEstimator.addFrame(trackedCorners)
-                Log.d(TAG, "MultiFrame: accumulated frame %d (stability=%.0f%%)".format(
-                    multiFrameEstimator.frameCount, currentProgress * 100))
-            }
             prevStabilityProgress = currentProgress
 
             // Rotate corners for display orientation and normalize to [0,1]
@@ -203,13 +198,8 @@ class FrameAnalyzer(
                 totalMs, detectionMs, trackingResult.isTracked, trackingResult.state,
                 rotation, consecutiveMisses))
 
-            // Compute multi-frame estimate when stable (auto-capture imminent).
-            // This avoids running the SVD solve on every frame — only compute when needed.
-            val multiFrameEst = if (smoother.isStable && multiFrameEstimator.frameCount >= multiFrameEstimator.minFrames) {
-                multiFrameEstimator.estimateAspectRatio()
-            } else {
-                null
-            }
+            // Multi-frame estimation disabled (see above). AR is computed at capture time.
+            val multiFrameEst: MultiFrameEstimate? = null
 
             val result = FrameDetectionResult(
                 normalizedCorners = normalized,

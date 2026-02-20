@@ -17,6 +17,7 @@ import com.docshot.camera.processCapture
 import com.docshot.cv.CameraIntrinsics
 import com.docshot.cv.MultiFrameEstimate
 import com.docshot.cv.detectAndCorrect
+import com.docshot.cv.estimateAspectRatio
 import com.docshot.cv.rectify
 import com.docshot.cv.rectifyWithAspectRatio
 import com.docshot.cv.refineCorners
@@ -324,19 +325,19 @@ class CameraViewModel : ViewModel() {
                                         result.originalBitmap.width,
                                         result.originalBitmap.height
                                     )
-                                    // Snapshot multi-frame AR estimate if confidence is sufficient
-                                    val mfEstimate = _latestMultiFrameEstimate
-                                    val estimatedAR = if (mfEstimate != null
-                                        && mfEstimate.confidence >= MULTI_FRAME_CONFIDENCE_THRESHOLD
-                                    ) {
-                                        Log.d(TAG, "Multi-frame AR: ratio=%.4f, confidence=%.2f, frames=%d — using as initial".format(
-                                            mfEstimate.estimatedRatio, mfEstimate.confidence, mfEstimate.frameCount))
-                                        mfEstimate.estimatedRatio.toFloat()
+                                    // Estimate aspect ratio: single-frame on capture corners
+                                    // (full-res, intrinsics match sensor coordinate system)
+                                    val singleFrameEst = estimateAspectRatio(
+                                        result.corners, _cameraIntrinsics
+                                    )
+                                    val estimatedAR = if (singleFrameEst.confidence >= 0.5) {
+                                        Log.d(TAG, "Single-frame AR: ratio=%.4f, confidence=%.2f, format=%s — using as initial".format(
+                                            singleFrameEst.estimatedRatio, singleFrameEst.confidence,
+                                            singleFrameEst.matchedFormat?.name ?: "custom"))
+                                        singleFrameEst.estimatedRatio.toFloat()
                                     } else {
-                                        Log.d(TAG, "Multi-frame AR: %s — falling back to default".format(
-                                            if (mfEstimate == null) "not available"
-                                            else "low confidence (%.2f < %.2f)".format(
-                                                mfEstimate.confidence, MULTI_FRAME_CONFIDENCE_THRESHOLD)))
+                                        Log.d(TAG, "Single-frame AR: low confidence (%.2f) — falling back to default".format(
+                                            singleFrameEst.confidence))
                                         null
                                     }
                                     _cameraState.value = CameraUiState.Result(
@@ -481,13 +482,10 @@ class CameraViewModel : ViewModel() {
                     com.docshot.cv.DocumentOrientation.ROTATE_180 -> 2
                     com.docshot.cv.DocumentOrientation.ROTATE_270 -> 3
                 }
-                // Snapshot multi-frame AR estimate (may still be available from
-                // the stabilization window before this low-confidence capture)
-                val mfEstimate = _latestMultiFrameEstimate
-                val estimatedAR = if (mfEstimate != null
-                    && mfEstimate.confidence >= MULTI_FRAME_CONFIDENCE_THRESHOLD
-                ) {
-                    mfEstimate.estimatedRatio.toFloat()
+                // Single-frame AR estimation from adjusted corners
+                val sfEstimate = estimateAspectRatio(adjustedCorners, _cameraIntrinsics)
+                val estimatedAR = if (sfEstimate.confidence >= 0.5) {
+                    sfEstimate.estimatedRatio.toFloat()
                 } else {
                     null
                 }

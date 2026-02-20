@@ -56,23 +56,23 @@ app/src/main/java/com/docshot/
 ## Current State (v1.2.0)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.0 complete (including C4 on-device validation).** KLT corner tracking (WP-A) + dual-regime aspect ratio estimation + multi-frame refinement (WP-B) + integration/polish (WP-C). Post-profiling fixes: detection timing logging corrected, MultiFrameAR result cached (2400 redundant SVD solves eliminated). ~124 unit tests + 27 instrumented. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+- **v1.2.0 complete (including C4 on-device validation).** KLT corner tracking (WP-A) + dual-regime aspect ratio estimation (WP-B) + integration/polish (WP-C). Post-v1.2.0 hotfixes: KLT confidence carry-forward (auto-capture was broken — KLT frames injected 0.0 confidence), switched to single-frame AR estimation at capture time (multi-frame Zhang degenerate during stabilization). ~124 unit tests + 27 instrumented. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
 
 ## Key Architecture Details (for current work)
 
 ### Auto-Capture Pipeline
 - `QuadSmoother`: buffers last 5 detections, 20-frame stability threshold, three-tier drift response (<2.5% increment, 2.5-10% halve, >10% hard reset), pre-smoothing jump detection at 10%
-- `FrameAnalyzer`: hybrid detect+track via `CornerTracker` (KLT on most frames, full detection every 3rd frame during tracking), adaptive frame skipping disabled during tracking
+- `FrameAnalyzer`: hybrid detect+track via `CornerTracker` (KLT on most frames, full detection every 3rd frame during tracking), adaptive frame skipping disabled during tracking, KLT-only frames carry forward last detection confidence (v1.2.0 fix: previously injected 0.0 → broke auto-capture)
 - AF lock triggers at 50% stability (10/20 frames), auto-capture fires at 100% + confidence >= 0.65 + 1.5s warmup
 - `CaptureProcessor`: re-detects on full-res capture frame, validates against preview corners (5% drift tolerance)
 
-### Aspect Ratio (dual-regime + multi-frame)
+### Aspect Ratio (single-frame dual-regime)
 - `AspectRatioEstimator`: dual-regime estimation — angular correction (<15deg severity) + projective decomposition (>20deg) + transition blending (15-20deg). Format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography error disambiguation when intrinsics available
-- `MultiFrameAspectEstimator`: accumulates homographies during stabilization window, solves via Zhang's method (no intrinsics) or K_inv decomposition (with intrinsics), median aggregation, variance-based confidence
 - Camera intrinsics: `LENS_INTRINSIC_CALIBRATION` (API 28+) or sensor-size fallback
-- `FrameAnalyzer` accumulates KLT-tracked corners into `MultiFrameAspectEstimator` during stabilization, estimate computed when stability reached
-- ResultScreen initial ratio: locked ratio (priority) > multi-frame estimate (conf >= 0.7, if auto-estimate enabled) > A4 fallback (0.707). Format label shows "(auto)" suffix when auto-estimated. Slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
-- Gallery imports use single-frame dual-regime estimation (angular correction, no multi-frame)
+- AR estimated at capture time from full-res corners + intrinsics (single-frame). Validated on 11x22cm letter: estimates within 2% of true ratio (0.500)
+- `MultiFrameAspectEstimator` exists but accumulation disabled — Zhang's method is degenerate during stabilization (camera stationary → near-identical homographies → garbage SVD). Code preserved for future revisit with proper intrinsics scaling + H direction fix
+- ResultScreen initial ratio: locked ratio (priority) > single-frame estimate (conf >= 0.5, if auto-estimate enabled) > A4 fallback (0.707). Format label shows "(auto)" suffix when auto-estimated. Slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
+- Gallery imports use single-frame dual-regime estimation (angular correction)
 - Settings toggle: "Aspect ratio default" — Auto (estimated) vs Always A4, persisted in DataStore
 
 ### Confidence Thresholds
