@@ -361,7 +361,7 @@ fun CameraPreview(
             val hintText = if (detectionState.isPartialDocument) {
                 "Move back to fit document"
             } else {
-                "Point at a document"
+                "Tap to capture manually"
             }
             Text(
                 text = hintText,

@@ -21,8 +21,8 @@ android {
         applicationId = "com.docshot"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2000007
-        versionName = "1.2.1"
+        versionCode = 2000008
+        versionName = "1.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

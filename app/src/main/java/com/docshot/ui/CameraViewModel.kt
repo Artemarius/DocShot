@@ -323,7 +323,15 @@ class CameraViewModel : ViewModel() {
                             imageProxy.close()
 
                             if (result != null) {
-                                if (result.confidence >= RESULT_CONFIDENCE_THRESHOLD) {
+                                if (result.corners.isEmpty()) {
+                                    // No document found — manual corner placement with defaults
+                                    Log.d(TAG, "No document detected — routing to manual corner placement")
+                                    _cameraState.value = CameraUiState.LowConfidence(
+                                        originalBitmap = result.originalBitmap,
+                                        corners = defaultCorners(result.originalBitmap.width, result.originalBitmap.height),
+                                        confidence = 0.0
+                                    )
+                                } else if (result.confidence >= RESULT_CONFIDENCE_THRESHOLD) {
                                     Log.d(TAG, "High confidence (%.2f) — routing to Result".format(
                                         result.confidence))
                                     val normCorners = cornersToNormalized(
@@ -699,6 +707,24 @@ class CameraViewModel : ViewModel() {
         if (_flashEnabled.value) {
             camera?.cameraControl?.enableTorch(true)
         }
+    }
+
+    /**
+     * Returns 4 default corner points inset 10% from the image edges (TL, TR, BR, BL).
+     * Used when no document quad is detected, to seed the manual corner adjustment UI.
+     */
+    private fun defaultCorners(width: Int, height: Int): List<org.opencv.core.Point> {
+        val margin = 0.1
+        val left = width * margin
+        val right = width * (1 - margin)
+        val top = height * margin
+        val bottom = height * (1 - margin)
+        return listOf(
+            org.opencv.core.Point(left, top),
+            org.opencv.core.Point(right, top),
+            org.opencv.core.Point(right, bottom),
+            org.opencv.core.Point(left, bottom)
+        )
     }
 
     /**

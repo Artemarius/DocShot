@@ -22,6 +22,7 @@
 | v1.1.2 | No-Camera Fallback | Complete | — |
 | v1.2.0 | KLT Tracking + Aspect Ratio Recovery | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.1 | AR Estimation Fixes & Robustness | Complete | ~124 unit + 27 instrumented = ~151 |
+| v1.2.2 | Manual Capture Path | Complete | ~124 unit + 27 instrumented = ~151 |
 
 ---
 
@@ -303,6 +304,29 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 **Validation:** Tested on S21 with 11x22cm envelope (true ratio 0.50). Projective path produces 0.497 at 18.4 deg severity. Robust across portrait, landscape, and angled orientations.
 
 **Files changed:** `AspectRatioEstimator.kt`, `CameraScreen.kt`, `CameraViewModel.kt`, `GalleryViewModel.kt`, `ResultScreen.kt`, `AspectRatioEstimatorTest.kt`
+
+---
+
+## v1.2.2: Manual Capture Path
+
+**Goal:** Always allow the user to take a photo, even when no document quad is detected. Never block the manual path.
+
+**Problem:** When detection failed (low contrast, cluttered background, unusual document), `processCapture()` returned `null`, ViewModel showed "No document detected" error, and auto-reset after 2s. User was completely blocked.
+
+**Changes:**
+
+- **`CaptureProcessor`:** The null-return branch now returns a `CaptureResult` with the original bitmap and `corners = emptyList()`. `rectifiedBitmap` shares the same reference (no warp performed). The `rotatedMat` is still released by the existing `finally` block after `matToBitmap` creates a copy.
+- **`CameraViewModel`:** New routing branch before existing confidence checks: when `result.corners.isEmpty()`, routes to `LowConfidence` state with `defaultCorners()` — a 10%-inset rectangle (TL, TR, BR, BL). No `rectifiedBitmap.recycle()` since it's the same reference as `originalBitmap`. Added `defaultCorners()` helper (same pattern as `GalleryViewModel`).
+- **`CameraScreen`:** Hint text changed from "Point at a document" to "Tap to capture manually" when no detection and camera is idle.
+
+**What already worked (no changes needed):**
+- Shutter FAB always visible and clickable when Idle
+- `CornerAdjustScreen` accepts any bitmap + 4 corners
+- `acceptLowConfidenceCorners()` flow: sub-pixel refine → rectify → orientation → AR estimate → Result
+- Auto-capture path unchanged (requires confidence >= 0.65 + stability + AF lock)
+- Gallery no-detection path already used default corners
+
+**Files changed:** `CaptureProcessor.kt`, `CameraViewModel.kt`, `CameraScreen.kt` (~25 lines)
 
 ---
 

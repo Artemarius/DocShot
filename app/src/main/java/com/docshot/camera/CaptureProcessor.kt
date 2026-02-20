@@ -176,10 +176,17 @@ fun processCapture(
             detectionConfidence = 0.5
             Log.d(TAG, "Re-detection failed, falling back to preview corners (confidence=0.5)")
         } else {
-            Log.d(TAG, "processCapture: no document found, no preview fallback")
-            rotatedMat.release()
-            rotatedMat = null
-            return null
+            Log.d(TAG, "processCapture: no document found — returning for manual corner placement")
+            val originalBitmap = matToBitmap(rotatedMat)
+            val ms = (System.nanoTime() - start) / 1_000_000.0
+            return CaptureResult(
+                originalBitmap = originalBitmap,
+                rectifiedBitmap = originalBitmap,
+                pipelineMs = ms,
+                confidence = 0.0,
+                corners = emptyList(),
+                autoRotationSteps = 0
+            )
         }
 
         // Sub-pixel corner refinement on grayscale
