@@ -48,15 +48,15 @@ Android document rectification app. Camera input -> automatic document boundary 
 ```
 app/src/main/java/com/docshot/
 ├── ui/          # Compose screens + navigation
-├── camera/      # CameraX setup, frame analysis, QuadSmoother
+├── camera/      # CameraX setup, frame analysis, QuadSmoother, CornerTracker
 ├── cv/          # Document detection, rectification, post-processing
 └── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
 ## Current State (v1.1.2)
-- **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light), 74 tests (47 unit + 27 instrumented). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
+- **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light), 86 tests (59 unit + 27 instrumented). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.0 planned.** KLT corner tracking + multi-frame aspect ratio estimation. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+- **v1.2.0 in progress.** KLT corner tracking + multi-frame aspect ratio estimation. A1 (CornerTracker) complete; A2-A4 + WP-B/C remaining. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
 
 ## Key Architecture Details (for current work)
 

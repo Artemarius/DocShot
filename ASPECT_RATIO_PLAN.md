@@ -18,7 +18,7 @@
 | Projective VP estimation (high-severity) | **Planned (v1.2.0 B4)** | |
 | Transition-zone blending | **Planned (v1.2.0 B5)** | |
 | Multi-frame refinement | **Planned (v1.2.0 B6)** | |
-| KLT corner tracking | **Planned (v1.2.0 A1-A4)** | Foundation for multi-frame |
+| KLT corner tracking (`CornerTracker`) | **A1 complete, A2-A4 planned** | State machine, KLT flow, convexity/area guards, 23 unit tests |
 
 ---
 
