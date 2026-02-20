@@ -259,6 +259,13 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - Settings: "Aspect ratio default" toggle (Auto estimated vs Always A4)
 - Version bump to 1.2.0
 
+### C4: On-Device Performance Validation (S21, Snapdragon 888)
+- KLT-only frames: 2.1ms median, 4.8ms P95
+- KLT + correction detection: 11.8ms median, 36.1ms P95
+- 97.2% of tracked frames under 30ms budget
+- No-doc detection: 30.4ms median (exhausts 4 strategies; non-critical path)
+- Post-profiling fixes: `DetectionStatus.detectionMs` logging corrected (was 0.0 for no-doc frames), `MultiFrameAspectEstimator` result cached after first solve (eliminated ~2,400 redundant SVD solves per session)
+
 ---
 
 ## Dropped: ML-Enhanced Detection (originally planned Phase 9)

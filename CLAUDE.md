@@ -56,7 +56,7 @@ app/src/main/java/com/docshot/
 ## Current State (v1.2.0)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.0 complete.** KLT corner tracking (WP-A) + dual-regime aspect ratio estimation + multi-frame refinement (WP-B) + integration/polish (WP-C). ~124 unit tests + 27 instrumented. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+- **v1.2.0 complete (including C4 on-device validation).** KLT corner tracking (WP-A) + dual-regime aspect ratio estimation + multi-frame refinement (WP-B) + integration/polish (WP-C). Post-profiling fixes: detection timing logging corrected, MultiFrameAR result cached (2400 redundant SVD solves eliminated). ~124 unit tests + 27 instrumented. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
 
 ## Key Architecture Details (for current work)
 
