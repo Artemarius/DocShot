@@ -1,6 +1,7 @@
 package com.docshot.ui
 
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -64,6 +65,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+private const val TAG = "DocShot:ResultScreen"
+
 /** Snap threshold for format label reactivity (matches AspectRatioEstimator). */
 private const val FORMAT_SNAP_THRESHOLD = 0.06f
 
@@ -79,7 +82,8 @@ fun ResultScreen(
     onAspectRatioChange: (Double) -> Unit = {},
     isAspectRatioLocked: Boolean = false,
     lockedAspectRatio: Float = 0.707f,
-    onToggleAspectRatioLock: (Boolean, Float) -> Unit = { _, _ -> }
+    onToggleAspectRatioLock: (Boolean, Float) -> Unit = { _, _ -> },
+    aspectRatioAutoEstimate: Boolean = true
 ) {
     var showRectified by rememberSaveable { mutableStateOf(true) }
     var selectedFilter by rememberSaveable { mutableStateOf(PostProcessFilter.NONE.name) }
@@ -98,18 +102,41 @@ fun ResultScreen(
         minOf(w, h) / maxOf(w, h)
     }
 
-    // Default to locked ratio when locked, otherwise A4
-    val defaultRatio = if (isAspectRatioLocked) lockedAspectRatio else 0.707f
+    // Initial aspect ratio priority: (1) locked > (2) multi-frame estimate > (3) A4 default
+    val defaultRatio = remember(isAspectRatioLocked, lockedAspectRatio, data.estimatedAspectRatio, aspectRatioAutoEstimate) {
+        when {
+            isAspectRatioLocked -> {
+                Log.d(TAG, "Initial ratio: %.4f (locked)".format(lockedAspectRatio))
+                lockedAspectRatio
+            }
+            aspectRatioAutoEstimate && data.estimatedAspectRatio != null -> {
+                Log.d(TAG, "Initial ratio: %.4f (multi-frame estimate)".format(data.estimatedAspectRatio))
+                data.estimatedAspectRatio
+            }
+            else -> {
+                Log.d(TAG, "Initial ratio: 0.7070 (A4 default)")
+                0.707f
+            }
+        }
+    }
+
+    // Track whether the initial ratio was set from auto-estimation
+    val wasAutoEstimated = remember(isAspectRatioLocked, data.estimatedAspectRatio, aspectRatioAutoEstimate) {
+        !isAspectRatioLocked && aspectRatioAutoEstimate && data.estimatedAspectRatio != null
+    }
+    // User has manually moved the slider or picked from dropdown — suppress "(auto)" label
+    var userAdjustedRatio by rememberSaveable { mutableStateOf(false) }
     var currentRatio by rememberSaveable {
         mutableFloatStateOf(defaultRatio)
     }
 
-    // Reactive format label: updates as slider moves
-    val currentFormatLabel = remember(currentRatio) {
-        KNOWN_FORMATS
+    // Reactive format label: updates as slider moves, appends "(auto)" when auto-estimated
+    val currentFormatLabel = remember(currentRatio, wasAutoEstimated, userAdjustedRatio) {
+        val baseName = KNOWN_FORMATS
             .filter { abs(currentRatio - it.ratio.toFloat()) <= FORMAT_SNAP_THRESHOLD }
             .minByOrNull { abs(currentRatio - it.ratio.toFloat()) }
             ?.name ?: "Custom"
+        if (wasAutoEstimated && !userAdjustedRatio) "$baseName (auto)" else baseName
     }
 
     // Format dropdown state
@@ -287,6 +314,7 @@ fun ResultScreen(
                                 onClick = {
                                     currentRatio = format.ratio.toFloat()
                                     pendingRatio = currentRatio
+                                    userAdjustedRatio = true
                                     showFormatMenu = false
                                 }
                             )
@@ -299,7 +327,10 @@ fun ResultScreen(
                 // Slider fills remaining space (disabled when locked)
                 Slider(
                     value = currentRatio,
-                    onValueChange = { currentRatio = it },
+                    onValueChange = {
+                        currentRatio = it
+                        userAdjustedRatio = true
+                    },
                     onValueChangeFinished = { pendingRatio = currentRatio },
                     valueRange = 0.25f..1.0f,
                     enabled = !isAspectRatioLocked,

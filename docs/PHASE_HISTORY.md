@@ -20,6 +20,7 @@
 | 12 | Google Play Release | In Progress | — |
 | v1.1.0 | UX Polish (flash, A4 default, AR lock) | Complete | — |
 | v1.1.2 | No-Camera Fallback | Complete | — |
+| v1.2.0 | KLT Tracking + Aspect Ratio Recovery | Complete | ~124 unit + 27 instrumented = ~151 |
 
 ---
 
@@ -229,6 +230,34 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - Auto-selects Import tab when no camera detected
 - Camera tab hidden, defensive guard in CameraPermissionScreen
 - Enables Play Store screenshot capture on no-camera emulators
+
+---
+
+## v1.2.0: KLT Corner Tracking + Aspect Ratio Recovery
+
+**Goal:** Accurate automatic aspect ratio estimation using dual-regime analysis and multi-frame refinement, powered by KLT optical flow corner tracking.
+
+### WP-A: KLT Corner Tracking
+- `CornerTracker`: pyramidal Lucas-Kanade optical flow state machine (DETECT_ONLY/TRACKING), 15x15 window, 2 pyramid levels, status+error validation, convexity guard
+- Hybrid detect+track in `FrameAnalyzer`: KLT on most frames, full detection every 3rd frame during tracking, 8px correction drift threshold
+- Wired through `QuadSmoother` with `isTracked` flag on `FrameDetectionResult`
+- Lifecycle: reset on enterIdle, release on ViewModel clear
+- ~65% CPU reduction during 20-frame stabilization window, +300KB memory
+
+### WP-B: Multi-Frame Aspect Ratio Estimation
+- Hartley normalization for numerical stability
+- Perspective severity classifier (max corner angle deviation from 90deg)
+- Dual-regime estimation: angular correction (<15deg) + projective decomposition (>20deg) + transition blending (15-20deg)
+- `MultiFrameAspectEstimator`: accumulates homographies during stabilization, Zhang's method solve, median aggregation, variance-based confidence
+- Integration: `FrameAnalyzer` accumulates KLT-tracked corners, estimate flows through `CaptureResultData` to `ResultScreen`
+- Gallery imports use single-frame dual-regime estimation
+- 75 new tests (severity classifier, angular correction, format snapping, multi-frame variance reduction)
+
+### WP-C: Integration & Polish
+- ResultScreen: three-tier initial ratio (locked > multi-frame estimate > A4 fallback), "(auto)" format label suffix
+- Debug overlay: KLT tracking state, perspective severity, estimated AR, multi-frame count
+- Settings: "Aspect ratio default" toggle (Auto estimated vs Always A4)
+- Version bump to 1.2.0
 
 ---
 

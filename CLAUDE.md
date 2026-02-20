@@ -53,10 +53,10 @@ app/src/main/java/com/docshot/
 └── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
-## Current State (v1.1.2)
-- **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light), 86 tests (59 unit + 27 instrumented). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
+## Current State (v1.2.0)
+- **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.0 in progress.** KLT corner tracking + multi-frame aspect ratio estimation. WP-A complete (A1-A4), B1-B6 complete; B7-B10 + WP-C remaining. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+- **v1.2.0 complete.** KLT corner tracking (WP-A) + dual-regime aspect ratio estimation + multi-frame refinement (WP-B) + integration/polish (WP-C). ~124 unit tests + 27 instrumented. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
 
 ## Key Architecture Details (for current work)
 
@@ -70,7 +70,10 @@ app/src/main/java/com/docshot/
 - `AspectRatioEstimator`: dual-regime estimation — angular correction (<15deg severity) + projective decomposition (>20deg) + transition blending (15-20deg). Format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography error disambiguation when intrinsics available
 - `MultiFrameAspectEstimator`: accumulates homographies during stabilization window, solves via Zhang's method (no intrinsics) or K_inv decomposition (with intrinsics), median aggregation, variance-based confidence
 - Camera intrinsics: `LENS_INTRINSIC_CALIBRATION` (API 28+) or sensor-size fallback
-- ResultScreen defaults to A4 (0.707), slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
+- `FrameAnalyzer` accumulates KLT-tracked corners into `MultiFrameAspectEstimator` during stabilization, estimate computed when stability reached
+- ResultScreen initial ratio: locked ratio (priority) > multi-frame estimate (conf >= 0.7, if auto-estimate enabled) > A4 fallback (0.707). Format label shows "(auto)" suffix when auto-estimated. Slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
+- Gallery imports use single-frame dual-regime estimation (angular correction, no multi-frame)
+- Settings toggle: "Aspect ratio default" — Auto (estimated) vs Always A4, persisted in DataStore
 
 ### Confidence Thresholds
 - < 0.35: suppressed (no detection returned)

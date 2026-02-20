@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.FilterBAndW
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Image
@@ -110,6 +111,19 @@ fun SettingsScreen(
                 description = "Show detection latency on camera preview",
                 checked = settings.showDebugOverlay,
                 onCheckedChange = { scope.launch { preferencesRepository.setShowDebugOverlay(it) } }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // ── Aspect Ratio section ─────────────────────────────────────
+            SectionHeader(text = "Aspect Ratio")
+
+            SettingsToggleItem(
+                icon = Icons.Filled.AspectRatio,
+                title = "Aspect ratio default",
+                description = "When enabled, automatically estimates the document's aspect ratio. When disabled, defaults to A4.",
+                checked = settings.aspectRatioAutoEstimate,
+                onCheckedChange = { scope.launch { preferencesRepository.setAspectRatioAutoEstimate(it) } }
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

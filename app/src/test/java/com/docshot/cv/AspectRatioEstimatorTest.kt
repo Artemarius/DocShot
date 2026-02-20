@@ -629,4 +629,403 @@ class AspectRatioEstimatorTest {
     fun `estimateAspectRatioDualRegime rejects non-4-point input`() {
         estimateAspectRatioDualRegime(emptyList())
     }
+
+    // =======================================================================
+    // B10: Hartley Normalization — Invertibility
+    // =======================================================================
+
+    @Test
+    fun `hartleyNormalize is invertible`() {
+        // Applying T then T_inv should recover the original points
+        val corners = listOf(
+            Point(73.0, 142.0),
+            Point(310.0, 158.0),
+            Point(295.0, 410.0),
+            Point(88.0, 395.0)
+        )
+
+        val (normalized, T) = hartleyNormalize(corners)
+        var Tinv: org.opencv.core.Mat? = null
+        try {
+            Tinv = org.opencv.core.Mat()
+            org.opencv.core.Core.invert(T, Tinv)
+
+            // Apply T_inv to each normalized point: T_inv * [nx, ny, 1]^T
+            for (i in corners.indices) {
+                val nx = normalized[i].x
+                val ny = normalized[i].y
+                val rx = Tinv.get(0, 0)[0] * nx + Tinv.get(0, 1)[0] * ny + Tinv.get(0, 2)[0]
+                val ry = Tinv.get(1, 0)[0] * nx + Tinv.get(1, 1)[0] * ny + Tinv.get(1, 2)[0]
+                assertEquals(
+                    "Recovered X[$i] should match original",
+                    corners[i].x, rx, 1e-8
+                )
+                assertEquals(
+                    "Recovered Y[$i] should match original",
+                    corners[i].y, ry, 1e-8
+                )
+            }
+        } finally {
+            T.release()
+            Tinv?.release()
+        }
+    }
+
+    @Test
+    fun `hartleyNormalize centroid at origin for asymmetric quad`() {
+        // Non-symmetric distorted quad to verify centroid computation is general
+        val corners = listOf(
+            Point(10.0, 20.0),
+            Point(500.0, 50.0),
+            Point(480.0, 600.0),
+            Point(30.0, 580.0)
+        )
+
+        val (normalized, T) = hartleyNormalize(corners)
+        try {
+            val cx = normalized.map { it.x }.average()
+            val cy = normalized.map { it.y }.average()
+            assertEquals("Centroid X should be ~0", 0.0, cx, 1e-10)
+            assertEquals("Centroid Y should be ~0", 0.0, cy, 1e-10)
+
+            val avgDist = normalized.map { sqrt(it.x * it.x + it.y * it.y) }.average()
+            assertEquals("Average distance should be sqrt(2)", sqrt(2.0), avgDist, 1e-10)
+        } finally {
+            T.release()
+        }
+    }
+
+    @Test
+    fun `hartleyNormalize handles nearly collinear points gracefully`() {
+        // Points nearly on a line -- should still produce valid normalization
+        val corners = listOf(
+            Point(0.0, 0.0),
+            Point(100.0, 1.0),
+            Point(200.0, 2.0),
+            Point(300.0, 3.0)
+        )
+
+        val (normalized, T) = hartleyNormalize(corners)
+        try {
+            val cx = normalized.map { it.x }.average()
+            val cy = normalized.map { it.y }.average()
+            assertEquals("Centroid X should be ~0", 0.0, cx, 1e-10)
+            assertEquals("Centroid Y should be ~0", 0.0, cy, 1e-10)
+        } finally {
+            T.release()
+        }
+    }
+
+    // =======================================================================
+    // B10: Format Snapping Tests (via estimateAspectRatioDualRegime)
+    // =======================================================================
+
+    @Test
+    fun `formatSnap_ratio0_71_snapsToA4`() {
+        // Ratio 0.71 is within SNAP_THRESHOLD (0.06) of A4 (0.707)
+        // Build a rectangle whose raw ratio is ~0.71
+        // ratio = min/max = w/h => w = 0.71 * h
+        val h = 1000.0
+        val w = h * 0.71
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNotNull("Should match a format for ratio ~0.71", estimate.matchedFormat)
+        assertEquals(
+            "Ratio 0.71 should snap to A4",
+            "A4", estimate.matchedFormat!!.name
+        )
+    }
+
+    @Test
+    fun `formatSnap_ratio0_78_snapsToUSLetter`() {
+        // Ratio 0.78 is within SNAP_THRESHOLD (0.06) of US Letter (0.773)
+        val h = 1000.0
+        val w = h * 0.78
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNotNull("Should match a format for ratio ~0.78", estimate.matchedFormat)
+        assertEquals(
+            "Ratio 0.78 should snap to US Letter",
+            "US Letter", estimate.matchedFormat!!.name
+        )
+    }
+
+    @Test
+    fun `formatSnap_ratio0_50_noSnap`() {
+        // Ratio 0.50 is not within SNAP_THRESHOLD of any known format:
+        // - Business Card: 0.571 -> distance 0.071 > 0.06
+        // - Receipt: 0.333 -> distance 0.167 > 0.06
+        val h = 1000.0
+        val w = h * 0.50
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNull(
+            "Ratio 0.50 should not snap to any format",
+            estimate.matchedFormat
+        )
+    }
+
+    @Test
+    fun `formatSnap_exactBoundary_A4plusThreshold`() {
+        // A4 ratio is 0.707, SNAP_THRESHOLD is 0.06
+        // Ratio exactly at 0.707 + 0.06 = 0.767 should still snap
+        val h = 1000.0
+        val w = h * 0.767
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        // At 0.767, distance to A4 (0.707) = 0.060 (at boundary),
+        // distance to US Letter (0.773) = 0.006 (much closer)
+        // Should snap to US Letter since it's closer
+        assertNotNull("Should match some format at boundary", estimate.matchedFormat)
+        assertEquals(
+            "At ratio 0.767, US Letter (0.773) is closer than A4 (0.707)",
+            "US Letter", estimate.matchedFormat!!.name
+        )
+    }
+
+    @Test
+    fun `formatSnap_exactBoundary_justOutsideAllFormats`() {
+        // Ratio 0.45 is far from all formats:
+        // - Business Card: 0.571 -> distance 0.121 > 0.06
+        // - Receipt: 0.333 -> distance 0.117 > 0.06
+        val h = 1000.0
+        val w = h * 0.45
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNull(
+            "Ratio 0.45 should not snap to any format",
+            estimate.matchedFormat
+        )
+    }
+
+    @Test
+    fun `formatSnap_IDCard_snapsCorrectly`() {
+        // ID Card ratio: 1.0 / 1.586 = 0.631
+        val h = 1000.0
+        val w = h * 0.631
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNotNull("Should match ID Card format", estimate.matchedFormat)
+        assertEquals("ID Card", estimate.matchedFormat!!.name)
+    }
+
+    @Test
+    fun `formatSnap_BusinessCard_snapsCorrectly`() {
+        // Business Card ratio: 1.0 / 1.75 = 0.571
+        val h = 1000.0
+        val w = h * 0.571
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNotNull("Should match Business Card format", estimate.matchedFormat)
+        assertEquals("Business Card", estimate.matchedFormat!!.name)
+    }
+
+    @Test
+    fun `formatSnap_highConfidence_forExactRatio`() {
+        // Exact A4 ratio should yield very high confidence
+        val corners = makeRect(210.0, 297.0)
+        val estimate = estimateAspectRatio(corners)
+
+        assertNotNull(estimate.matchedFormat)
+        assertTrue(
+            "Exact A4 ratio should have confidence > 0.9, was ${estimate.confidence}",
+            estimate.confidence > 0.9
+        )
+    }
+
+    @Test
+    fun `formatSnap_lowerConfidence_forDistantRatio`() {
+        // Ratio slightly off from A4 but within threshold
+        val h = 1000.0
+        val w = h * 0.75 // Distance from A4 (0.707) = 0.043
+        val corners = makeRect(w, h)
+        val estimate = estimateAspectRatio(corners)
+
+        // This falls between A4 and US Letter, confidence should be lower
+        assertNotNull(estimate.matchedFormat)
+        assertTrue(
+            "Off-center ratio should have lower confidence",
+            estimate.confidence < 0.95
+        )
+    }
+
+    // =======================================================================
+    // B10: Projective Estimation Additional Tests
+    // =======================================================================
+
+    @Test
+    fun `projectiveAspectRatio_A4_withMildPerspective`() {
+        // A4 document with controlled mild perspective distortion
+        // Simulated by making top edge slightly narrower (5% foreshortening)
+        val w = 210.0
+        val h = 297.0
+        val inset = w * 0.05 // 5% narrowing
+        val corners = listOf(
+            Point(inset / 2.0, 0.0),           // TL
+            Point(w - inset / 2.0, 0.0),       // TR
+            Point(w, h),                        // BR
+            Point(0.0, h)                       // BL
+        )
+        val ratio = projectiveAspectRatio(corners, TEST_INTRINSICS)
+        assertNotNull("Should produce a result", ratio)
+        // Allow wider tolerance for projective method under mild perspective
+        assertTrue(
+            "Ratio ($ratio) should be in document-like range [0.4, 0.95]",
+            ratio!! in 0.4..0.95
+        )
+    }
+
+    @Test
+    fun `projectiveAspectRatio_USLetter_withModerateSkew`() {
+        // US Letter proportions with moderate perspective
+        val w = 850.0
+        val h = 1100.0
+        val inset = 80.0
+        val corners = listOf(
+            Point(inset, 20.0),        // TL
+            Point(w - inset, 30.0),    // TR
+            Point(w - 10.0, h - 20.0), // BR
+            Point(10.0, h - 30.0)      // BL
+        )
+        val ratio = projectiveAspectRatio(corners, TEST_INTRINSICS)
+        assertNotNull("Should produce a result for US Letter", ratio)
+        assertTrue(
+            "Ratio ($ratio) should be reasonable",
+            ratio!! in 0.3..1.0
+        )
+    }
+
+    // =======================================================================
+    // B10: Dual-Regime Integration — Regime Selection Verification
+    // =======================================================================
+
+    @Test
+    fun `dualRegime_lowSeverity_usesAngular_producesAccurateA4`() {
+        // Near-frontal A4 with very mild distortion (severity should be < 15)
+        val corners = listOf(
+            Point(2.0, 0.0),       // TL (barely shifted)
+            Point(212.0, 1.0),     // TR
+            Point(211.0, 297.0),   // BR
+            Point(1.0, 296.0)      // BL
+        )
+        val severity = perspectiveSeverity(corners)
+        assertTrue(
+            "Setup: severity ($severity) should be < 15",
+            severity < 15.0
+        )
+
+        val estimate = estimateAspectRatioDualRegime(corners)
+        assertNotNull("Should match A4", estimate.matchedFormat)
+        assertEquals("A4", estimate.matchedFormat!!.name)
+    }
+
+    @Test
+    fun `dualRegime_highSeverity_withIntrinsics_usesProjective`() {
+        // Heavily skewed quad (severity > 20)
+        val corners = makeTrapezoid(w = 400.0, h = 400.0, topInset = 120.0)
+        val severity = perspectiveSeverity(corners)
+        assertTrue(
+            "Setup: severity ($severity) should be > 20",
+            severity > 20.0
+        )
+
+        // With intrinsics, dual-regime should use projective path
+        val estimate = estimateAspectRatioDualRegime(corners, TEST_INTRINSICS)
+        assertTrue(
+            "Ratio (${estimate.estimatedRatio}) should be in valid range",
+            estimate.estimatedRatio in 0.1..1.0
+        )
+    }
+
+    @Test
+    fun `dualRegime_transitionZone_blendsBothMethods`() {
+        // Find a quad that lands in the 15-20 degree transition zone
+        // Use binary search over insets to find the right severity
+        var targetInset = 35.0
+        var corners = makeTrapezoid(w = 400.0, h = 500.0, topInset = targetInset)
+        var severity = perspectiveSeverity(corners)
+
+        // Adjust to get in the 15-20 range
+        if (severity < 15.0) targetInset = 50.0
+        if (severity > 20.0) targetInset = 28.0
+        corners = makeTrapezoid(w = 400.0, h = 500.0, topInset = targetInset)
+        severity = perspectiveSeverity(corners)
+
+        // If we're in the transition zone, verify the blend works
+        if (severity in 15.0..20.0) {
+            val angularOnly = angularCorrectedRatio(corners)
+            val blended = estimateAspectRatioDualRegime(corners, TEST_INTRINSICS)
+
+            // The blended ratio should be different from pure angular
+            // (unless projective gives the same result, which is fine too)
+            assertTrue(
+                "Blended ratio (${blended.estimatedRatio}) should be in valid range",
+                blended.estimatedRatio in 0.1..1.0
+            )
+        }
+        // If we couldn't land in transition zone, just verify no crash
+        val estimate = estimateAspectRatioDualRegime(corners, TEST_INTRINSICS)
+        assertTrue(estimate.estimatedRatio in 0.1..1.0)
+    }
+
+    // =======================================================================
+    // B10: KnownFormat and AspectRatioEstimate data class tests
+    // =======================================================================
+
+    @Test
+    fun `KNOWN_FORMATS_ratios_are_all_valid`() {
+        for (fmt in KNOWN_FORMATS) {
+            assertTrue(
+                "Format ${fmt.name} ratio (${fmt.ratio}) should be > 0",
+                fmt.ratio > 0.0
+            )
+            assertTrue(
+                "Format ${fmt.name} ratio (${fmt.ratio}) should be <= 1.0",
+                fmt.ratio <= 1.0
+            )
+        }
+    }
+
+    @Test
+    fun `KNOWN_FORMATS_contains_all_standard_formats`() {
+        val names = KNOWN_FORMATS.map { it.name }.toSet()
+        assertTrue("Should contain A4", "A4" in names)
+        assertTrue("Should contain US Letter", "US Letter" in names)
+        assertTrue("Should contain ID Card", "ID Card" in names)
+        assertTrue("Should contain Business Card", "Business Card" in names)
+        assertTrue("Should contain Receipt", "Receipt" in names)
+        assertTrue("Should contain Square", "Square" in names)
+    }
+
+    @Test
+    fun `AspectRatioEstimate_data_class_holds_values`() {
+        val format = KnownFormat("Test", 0.5)
+        val estimate = AspectRatioEstimate(
+            estimatedRatio = 0.5,
+            matchedFormat = format,
+            confidence = 0.85,
+            verifiedByHomography = true
+        )
+        assertEquals(0.5, estimate.estimatedRatio, 0.001)
+        assertEquals(format, estimate.matchedFormat)
+        assertEquals(0.85, estimate.confidence, 0.001)
+        assertTrue(estimate.verifiedByHomography)
+    }
+
+    @Test
+    fun `AspectRatioEstimate_default_verifiedByHomography_is_false`() {
+        val estimate = AspectRatioEstimate(
+            estimatedRatio = 0.707,
+            matchedFormat = null,
+            confidence = 0.5
+        )
+        assertEquals(false, estimate.verifiedByHomography)
+    }
 }

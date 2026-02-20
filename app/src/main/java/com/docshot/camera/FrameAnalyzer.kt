@@ -3,6 +3,8 @@ package com.docshot.camera
 import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.docshot.cv.MultiFrameAspectEstimator
+import com.docshot.cv.MultiFrameEstimate
 import com.docshot.cv.detectDocumentWithStatus
 import org.opencv.core.CvType
 import org.opencv.core.Mat
@@ -39,6 +41,14 @@ class FrameAnalyzer(
 
     private val smoother = QuadSmoother()
     private val cornerTracker = CornerTracker()
+    private val multiFrameEstimator = MultiFrameAspectEstimator()
+
+    /**
+     * Previous stability progress, used to detect stability resets.
+     * When progress drops (smoother cleared or drift detected), the
+     * multi-frame estimator is also reset.
+     */
+    private var prevStabilityProgress: Float = 0f
 
     /** Number of consecutive frames with no valid detection (confidence < threshold). */
     private var consecutiveMisses = 0
@@ -49,19 +59,34 @@ class FrameAnalyzer(
     /** Last reported result, used when skipping frames. */
     private var lastResult: FrameDetectionResult? = null
 
-    /** Clears the smoother, tracker, and miss counter so stability builds from scratch. */
+    /** Clears the smoother, tracker, estimator, and miss counter so stability builds from scratch. */
     fun resetSmoothing() {
         smoother.clear()
         cornerTracker.reset()
+        multiFrameEstimator.reset()
+        prevStabilityProgress = 0f
         consecutiveMisses = 0
         frameCounter = 0
         lastResult = null
     }
 
-    /** Releases native resources held by the corner tracker. Call from ViewModel.onCleared(). */
-    fun releaseTracker() {
+    /** Releases native resources held by the corner tracker and multi-frame estimator. Call from ViewModel.onCleared(). */
+    fun releaseNativeResources() {
         cornerTracker.release()
+        multiFrameEstimator.release()
     }
+
+    @Deprecated("Use releaseNativeResources()", ReplaceWith("releaseNativeResources()"))
+    fun releaseTracker() {
+        releaseNativeResources()
+    }
+
+    /**
+     * Returns the current multi-frame aspect ratio estimate, or null if insufficient
+     * frames have been accumulated. This is available once auto-capture fires
+     * (stability reaches 100%) and is consumed by the capture pipeline.
+     */
+    fun getMultiFrameEstimate(): MultiFrameEstimate? = multiFrameEstimator.estimateAspectRatio()
 
     override fun analyze(imageProxy: ImageProxy) {
         frameCounter++
@@ -136,6 +161,26 @@ class FrameAnalyzer(
                 isTracked = trackingResult.isTracked
             )
 
+            // Multi-frame aspect ratio accumulation during stabilization window.
+            // Feed KLT-tracked corners into the estimator while the smoother is
+            // counting toward stability (progress > 0). Reset the estimator when
+            // stability drops (quad lost, drift, scene change).
+            val currentProgress = smoother.stabilityProgress
+            if (currentProgress < prevStabilityProgress && currentProgress == 0f) {
+                // Stability was reset — clear accumulated frames
+                multiFrameEstimator.reset()
+            }
+            if (trackingResult.isTracked
+                && trackedCorners != null
+                && currentProgress > 0f
+                && !smoother.isStable
+            ) {
+                multiFrameEstimator.addFrame(trackedCorners)
+                Log.d(TAG, "MultiFrame: accumulated frame %d (stability=%.0f%%)".format(
+                    multiFrameEstimator.frameCount, currentProgress * 100))
+            }
+            prevStabilityProgress = currentProgress
+
             // Rotate corners for display orientation and normalize to [0,1]
             val rotation = imageProxy.imageInfo.rotationDegrees
             val normalized = smoothed?.let {
@@ -158,6 +203,14 @@ class FrameAnalyzer(
                 totalMs, detectionMs, trackingResult.isTracked, trackingResult.state,
                 rotation, consecutiveMisses))
 
+            // Compute multi-frame estimate when stable (auto-capture imminent).
+            // This avoids running the SVD solve on every frame — only compute when needed.
+            val multiFrameEst = if (smoother.isStable && multiFrameEstimator.frameCount >= multiFrameEstimator.minFrames) {
+                multiFrameEstimator.estimateAspectRatio()
+            } else {
+                null
+            }
+
             val result = FrameDetectionResult(
                 normalizedCorners = normalized,
                 sourceWidth = displayWidth,
@@ -168,7 +221,8 @@ class FrameAnalyzer(
                 stabilityProgress = smoother.stabilityProgress,
                 confidence = smoother.averageConfidence,
                 isPartialDocument = status?.isPartialDocument ?: false,
-                isTracked = trackingResult.isTracked
+                isTracked = trackingResult.isTracked,
+                multiFrameEstimate = multiFrameEst
             )
             lastResult = result
             onResult(result)
@@ -284,5 +338,7 @@ data class FrameDetectionResult(
     val confidence: Double = 0.0,
     val isPartialDocument: Boolean = false,
     /** True if corners came from KLT tracking rather than full detection. */
-    val isTracked: Boolean = false
+    val isTracked: Boolean = false,
+    /** Multi-frame aspect ratio estimate, available when stability is reached. */
+    val multiFrameEstimate: MultiFrameEstimate? = null
 )

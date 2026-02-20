@@ -15,6 +15,7 @@ import androidx.lifecycle.viewModelScope
 import com.docshot.camera.FrameAnalyzer
 import com.docshot.camera.processCapture
 import com.docshot.cv.CameraIntrinsics
+import com.docshot.cv.MultiFrameEstimate
 import com.docshot.cv.detectAndCorrect
 import com.docshot.cv.rectify
 import com.docshot.cv.rectifyWithAspectRatio
@@ -41,6 +42,8 @@ import java.util.Locale
 private const val TAG = "DocShot:ViewModel"
 // Minimum confidence for auto-capture to fire (stability + this threshold)
 private const val AUTO_CAPTURE_CONFIDENCE_THRESHOLD = 0.65
+// Minimum multi-frame estimate confidence to propagate to ResultScreen
+private const val MULTI_FRAME_CONFIDENCE_THRESHOLD = 0.7
 // Minimum confidence to route directly to Result; below this goes to corner adjustment.
 // Matches AUTO_CAPTURE_CONFIDENCE_THRESHOLD — if we trust it enough to auto-capture,
 // we trust it enough to show the result (user can still hit Adjust).
@@ -64,7 +67,9 @@ data class DetectionUiState(
     val confidence: Double = 0.0,
     val isStable: Boolean = false,
     val stabilityProgress: Float = 0f,
-    val isPartialDocument: Boolean = false
+    val isPartialDocument: Boolean = false,
+    /** True if corners came from KLT tracking rather than full detection. */
+    val isTracked: Boolean = false
 )
 
 /** State machine for the capture -> result flow. */
@@ -90,7 +95,10 @@ data class CaptureResultData(
     val normalizedCorners: FloatArray = floatArrayOf(),
     val cameraIntrinsics: CameraIntrinsics? = null,
     val autoRotationSteps: Int = 0,  // 0-3: auto-orientation from detectAndCorrect
-    val manualRotationSteps: Int = 0  // 0-3: additional manual rotations by user
+    val manualRotationSteps: Int = 0,  // 0-3: additional manual rotations by user
+    /** Multi-frame estimated aspect ratio (min/max, <= 1.0) from stabilization window.
+     *  Non-null only when confidence >= 0.7. Used by ResultScreen as initial ratio. */
+    val estimatedAspectRatio: Float? = null
 )
 
 class CameraViewModel : ViewModel() {
@@ -138,6 +146,15 @@ class CameraViewModel : ViewModel() {
     /** Camera intrinsics for homography-based aspect ratio verification. */
     private var _cameraIntrinsics: CameraIntrinsics? = null
 
+    /**
+     * Latest multi-frame aspect ratio estimate from the stabilization window.
+     * Updated each frame when stable; snapshotted at auto-capture time for B8.
+     */
+    private var _latestMultiFrameEstimate: MultiFrameEstimate? = null
+
+    /** Read-only accessor for the capture pipeline (task B8). */
+    val latestMultiFrameEstimate: MultiFrameEstimate? get() = _latestMultiFrameEstimate
+
     /** Called from CameraScreen after binding camera to extract lens calibration. */
     fun setCameraIntrinsics(intrinsics: CameraIntrinsics) {
         _cameraIntrinsics = intrinsics
@@ -148,6 +165,39 @@ class CameraViewModel : ViewModel() {
 
     /** Read-only accessor for debug overlay. */
     val isAfTriggering: Boolean get() = _isAfTriggering
+
+    // ── Debug overlay: AR estimation state ──────────────────────────────
+
+    /**
+     * Perspective severity (max corner angle deviation from 90deg).
+     * TODO: Wire from FrameAnalyzer when B7 integration lands --
+     * call perspectiveSeverity() on detected corners each frame and emit here.
+     */
+    private val _perspectiveSeverity = MutableStateFlow(0.0)
+    val perspectiveSeverity: StateFlow<Double> = _perspectiveSeverity
+
+    /**
+     * Current single-frame aspect ratio estimate (min/max, <= 1.0).
+     * TODO: Wire from FrameAnalyzer when B7 integration lands --
+     * call estimateAspectRatioDualRegime() on detected corners and emit here.
+     */
+    private val _estimatedAspectRatio = MutableStateFlow(0.0)
+    val estimatedAspectRatio: StateFlow<Double> = _estimatedAspectRatio
+
+    /**
+     * Name of matched known format (e.g., "A4", "US Letter"), or null if no snap.
+     * TODO: Wire from FrameAnalyzer when B7 integration lands.
+     */
+    private val _matchedFormatName = MutableStateFlow<String?>(null)
+    val matchedFormatName: StateFlow<String?> = _matchedFormatName
+
+    /**
+     * Number of frames accumulated by MultiFrameAspectEstimator.
+     * TODO: Wire from FrameAnalyzer when B7 integration lands --
+     * expose MultiFrameAspectEstimator.frameCount during stabilization window.
+     */
+    private val _multiFrameCount = MutableStateFlow(0)
+    val multiFrameCount: StateFlow<Int> = _multiFrameCount
 
     /**
      * Store a context reference for auto-capture. Must be called from CameraScreen
@@ -193,8 +243,12 @@ class CameraViewModel : ViewModel() {
             confidence = result.confidence,
             isStable = result.isStable,
             stabilityProgress = result.stabilityProgress,
-            isPartialDocument = result.isPartialDocument
+            isPartialDocument = result.isPartialDocument,
+            isTracked = result.isTracked
         )
+
+        // Store multi-frame estimate when available (becomes non-null at stability)
+        result.multiFrameEstimate?.let { _latestMultiFrameEstimate = it }
 
         // AF lock: trigger at 50% stability so AF has time to settle before auto-capture fires
         if (result.stabilityProgress >= AF_LOCK_STABILITY_THRESHOLD
@@ -270,6 +324,21 @@ class CameraViewModel : ViewModel() {
                                         result.originalBitmap.width,
                                         result.originalBitmap.height
                                     )
+                                    // Snapshot multi-frame AR estimate if confidence is sufficient
+                                    val mfEstimate = _latestMultiFrameEstimate
+                                    val estimatedAR = if (mfEstimate != null
+                                        && mfEstimate.confidence >= MULTI_FRAME_CONFIDENCE_THRESHOLD
+                                    ) {
+                                        Log.d(TAG, "Multi-frame AR: ratio=%.4f, confidence=%.2f, frames=%d — using as initial".format(
+                                            mfEstimate.estimatedRatio, mfEstimate.confidence, mfEstimate.frameCount))
+                                        mfEstimate.estimatedRatio.toFloat()
+                                    } else {
+                                        Log.d(TAG, "Multi-frame AR: %s — falling back to default".format(
+                                            if (mfEstimate == null) "not available"
+                                            else "low confidence (%.2f < %.2f)".format(
+                                                mfEstimate.confidence, MULTI_FRAME_CONFIDENCE_THRESHOLD)))
+                                        null
+                                    }
                                     _cameraState.value = CameraUiState.Result(
                                         CaptureResultData(
                                             originalBitmap = result.originalBitmap,
@@ -279,7 +348,8 @@ class CameraViewModel : ViewModel() {
                                             corners = result.corners,
                                             normalizedCorners = normCorners,
                                             cameraIntrinsics = _cameraIntrinsics,
-                                            autoRotationSteps = result.autoRotationSteps
+                                            autoRotationSteps = result.autoRotationSteps,
+                                            estimatedAspectRatio = estimatedAR
                                         )
                                     )
                                 } else {
@@ -411,6 +481,16 @@ class CameraViewModel : ViewModel() {
                     com.docshot.cv.DocumentOrientation.ROTATE_180 -> 2
                     com.docshot.cv.DocumentOrientation.ROTATE_270 -> 3
                 }
+                // Snapshot multi-frame AR estimate (may still be available from
+                // the stabilization window before this low-confidence capture)
+                val mfEstimate = _latestMultiFrameEstimate
+                val estimatedAR = if (mfEstimate != null
+                    && mfEstimate.confidence >= MULTI_FRAME_CONFIDENCE_THRESHOLD
+                ) {
+                    mfEstimate.estimatedRatio.toFloat()
+                } else {
+                    null
+                }
                 _cameraState.value = CameraUiState.Result(
                     CaptureResultData(
                         originalBitmap = originalBitmap,
@@ -420,7 +500,8 @@ class CameraViewModel : ViewModel() {
                         corners = adjustedCorners,
                         normalizedCorners = normCorners,
                         cameraIntrinsics = _cameraIntrinsics,
-                        autoRotationSteps = autoSteps
+                        autoRotationSteps = autoSteps,
+                        estimatedAspectRatio = estimatedAR
                     )
                 )
             } catch (e: Exception) {
@@ -598,7 +679,8 @@ class CameraViewModel : ViewModel() {
     private fun enterIdle() {
         cancelAfLock()
         idleEnteredAt = android.os.SystemClock.elapsedRealtime()
-        frameAnalyzer.resetSmoothing()
+        frameAnalyzer.resetSmoothing()  // Also resets multi-frame estimator
+        _latestMultiFrameEstimate = null
         _cameraState.value = CameraUiState.Idle
         // Re-enable torch if flash was logically on (it was turned off during capture)
         if (_flashEnabled.value) {
@@ -626,8 +708,8 @@ class CameraViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        // Release CornerTracker's native Mat resources
-        frameAnalyzer.releaseTracker()
+        // Release native Mat resources (CornerTracker + MultiFrameAspectEstimator)
+        frameAnalyzer.releaseNativeResources()
         val state = _cameraState.value
         when (state) {
             is CameraUiState.Result -> {

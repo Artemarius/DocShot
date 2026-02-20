@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.docshot.cv.detectDocument
+import com.docshot.cv.estimateAspectRatio
 import com.docshot.cv.rectify
 import com.docshot.cv.rectifyWithAspectRatio
 import com.docshot.cv.refineCorners
@@ -33,6 +34,9 @@ private const val TAG = "DocShot:GalleryVM"
 
 /** Detection kernels are tuned for ~640px frames; downscale large images for reliable detection. */
 private const val MAX_DETECTION_WIDTH = 1000
+
+/** Minimum confidence from the dual-regime AR estimator to use its ratio for gallery rectification. */
+private const val GALLERY_AR_MIN_CONFIDENCE = 0.35
 
 sealed class GalleryUiState {
     data object Idle : GalleryUiState()
@@ -261,7 +265,35 @@ class GalleryViewModel : ViewModel() {
                 val refined = refineCorners(gray, corners)
                 gray.release()
 
-                val rectified = rectify(mat, refined, Imgproc.INTER_CUBIC)
+                // Apply dual-regime aspect ratio estimation (angular correction for
+                // mild perspective, projective for heavy skew). Gallery images have no
+                // camera intrinsics, so the estimator falls back to the no-intrinsics
+                // path (angular correction or closest-format snap without homography
+                // disambiguation).
+                val arEstimate = estimateAspectRatio(
+                    corners = refined,
+                    intrinsics = null
+                )
+                Log.d(TAG, "Gallery AR estimate: ratio=%.4f, format=%s, conf=%.3f".format(
+                    arEstimate.estimatedRatio,
+                    arEstimate.matchedFormat?.name ?: "Custom",
+                    arEstimate.confidence
+                ))
+
+                // Use estimated ratio when confidence is sufficient (>= 0.35);
+                // otherwise fall back to raw edge-length rectification.
+                val rectified = if (arEstimate.confidence >= GALLERY_AR_MIN_CONFIDENCE) {
+                    rectifyWithAspectRatio(
+                        source = mat,
+                        corners = refined,
+                        targetRatio = arEstimate.estimatedRatio,
+                        interpolation = Imgproc.INTER_CUBIC
+                    )
+                } else {
+                    Log.d(TAG, "Gallery AR confidence too low (%.3f), using raw edge-length rectify"
+                        .format(arEstimate.confidence))
+                    rectify(mat, refined, Imgproc.INTER_CUBIC)
+                }
                 mat.release()
 
                 val rectifiedBitmap = matToBitmap(rectified)

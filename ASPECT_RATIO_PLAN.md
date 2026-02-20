@@ -18,7 +18,13 @@
 | Projective VP estimation (high-severity) | **Implemented (v1.2.0 B4)** | K_inv * H decomposition, homogeneous coords throughout |
 | Transition-zone blending | **Implemented (v1.2.0 B5)** | Linear blend 15-20deg, `estimateAspectRatio()` delegates to dual-regime |
 | Multi-frame refinement | **Implemented (v1.2.0 B6)** | Zhang's method + intrinsics path, median aggregation, variance confidence |
-| KLT corner tracking (`CornerTracker`) | **A1-A4 complete** | State machine, KLT flow, hybrid detect+track in FrameAnalyzer, lifecycle wired |
+| KLT corner tracking (`CornerTracker`) | **Implemented (v1.2.0 A1-A4)** | State machine, KLT flow, hybrid detect+track in FrameAnalyzer, lifecycle wired |
+| Multi-frame integration | **Implemented (v1.2.0 B7)** | FrameAnalyzer accumulates KLT-tracked corners during stabilization |
+| Capture pipeline wiring | **Implemented (v1.2.0 B8)** | Multi-frame estimate flows through CaptureResultData to ResultScreen |
+| Gallery single-frame AR | **Implemented (v1.2.0 B9)** | Dual-regime estimation for gallery imports (no multi-frame) |
+| Debug overlay | **Implemented (v1.2.0 C2)** | KLT state, severity, AR estimate, multi-frame count |
+| Auto vs A4 setting | **Implemented (v1.2.0 C3)** | DataStore toggle, Settings UI |
+| Format label + "(auto)" | **Implemented (v1.2.0 C1)** | ResultScreen shows auto-estimated indicator, settings wired |
 
 ---
 

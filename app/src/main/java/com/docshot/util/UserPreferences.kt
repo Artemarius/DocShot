@@ -26,7 +26,8 @@ data class DocShotSettings(
     val hapticFeedback: Boolean = true,
     val flashEnabled: Boolean = false,
     val aspectRatioLocked: Boolean = false,
-    val lockedAspectRatio: Float = 0.707f
+    val lockedAspectRatio: Float = 0.707f,
+    val aspectRatioAutoEstimate: Boolean = true
 )
 
 /**
@@ -47,6 +48,7 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_FLASH_ENABLED = booleanPreferencesKey("flash_enabled")
         val KEY_ASPECT_RATIO_LOCKED = booleanPreferencesKey("aspect_ratio_locked")
         val KEY_LOCKED_ASPECT_RATIO = floatPreferencesKey("locked_aspect_ratio")
+        val KEY_ASPECT_RATIO_AUTO_ESTIMATE = booleanPreferencesKey("aspect_ratio_auto_estimate")
     }
 
     /**
@@ -63,7 +65,8 @@ class UserPreferencesRepository(private val context: Context) {
             hapticFeedback = prefs[KEY_HAPTIC_FEEDBACK] ?: true,
             flashEnabled = prefs[KEY_FLASH_ENABLED] ?: false,
             aspectRatioLocked = prefs[KEY_ASPECT_RATIO_LOCKED] ?: false,
-            lockedAspectRatio = prefs[KEY_LOCKED_ASPECT_RATIO] ?: 0.707f
+            lockedAspectRatio = prefs[KEY_LOCKED_ASPECT_RATIO] ?: 0.707f,
+            aspectRatioAutoEstimate = prefs[KEY_ASPECT_RATIO_AUTO_ESTIMATE] ?: true
         )
     }
 
@@ -107,5 +110,9 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setLockedAspectRatio(ratio: Float) {
         require(ratio in 0.25f..1.0f) { "Aspect ratio must be 0.25-1.0, got $ratio" }
         context.dataStore.edit { prefs -> prefs[KEY_LOCKED_ASPECT_RATIO] = ratio }
+    }
+
+    suspend fun setAspectRatioAutoEstimate(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[KEY_ASPECT_RATIO_AUTO_ESTIMATE] = enabled }
     }
 }

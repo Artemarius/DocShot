@@ -113,6 +113,10 @@ fun CameraPreview(
     val cameraState by viewModel.cameraState.collectAsState()
     val autoCapEnabled by viewModel.autoCapEnabled.collectAsState()
     val flashEnabled by viewModel.flashEnabled.collectAsState()
+    val severity by viewModel.perspectiveSeverity.collectAsState()
+    val estimatedAR by viewModel.estimatedAspectRatio.collectAsState()
+    val matchedFormat by viewModel.matchedFormatName.collectAsState()
+    val multiFrameCount by viewModel.multiFrameCount.collectAsState()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val scope = rememberCoroutineScope()
 
@@ -193,7 +197,8 @@ fun CameraPreview(
                     preferencesRepository?.setAspectRatioLocked(locked)
                     preferencesRepository?.setLockedAspectRatio(ratio)
                 }
-            }
+            },
+            aspectRatioAutoEstimate = settings.aspectRatioAutoEstimate
         )
         return
     }
@@ -274,7 +279,7 @@ fun CameraPreview(
             )
         }
 
-        // Debug overlay: detection stats + auto-capture readiness
+        // Debug overlay: detection stats + auto-capture readiness + AR estimation
         if (detectionState.normalizedCorners != null) {
             val warmupRemaining = viewModel.warmupRemainingMs()
             val stableFrames = (detectionState.stabilityProgress * 20).toInt() // stableThreshold=20
@@ -288,6 +293,7 @@ fun CameraPreview(
                     && afLocked
             Text(
                 text = buildString {
+                    // Line 1: timing, stability, confidence, AF, readiness
                     append("%.0f ms | ".format(detectionState.detectionMs))
                     append("stable: $stableFrames/20 | ")
                     append("conf: %.2f".format(conf))
@@ -295,6 +301,33 @@ fun CameraPreview(
                     else if (afLocked) append(" | AF OK")
                     if (warmupRemaining > 0) append(" | warmup: ${warmupRemaining}ms")
                     if (autoReady) append(" | READY")
+
+                    // Line 2: KLT tracking state + AR estimation info
+                    append("\n")
+                    // Tracking state from isTracked flag
+                    val kltLabel = if (detectionState.isTracked) "TRACKING" else "DETECT"
+                    append("KLT: $kltLabel")
+
+                    // Perspective severity and regime label
+                    val severityLabel = when {
+                        severity < 15.0 -> "LOW"
+                        severity > 20.0 -> "HIGH"
+                        else -> "TRANSITION"
+                    }
+                    if (severity > 0.0) {
+                        append(" | sev: %.0f\u00B0 %s".format(severity, severityLabel))
+                    }
+
+                    // Estimated aspect ratio with format name
+                    if (estimatedAR > 0.0) {
+                        append(" | AR: %.3f".format(estimatedAR))
+                        matchedFormat?.let { append(" ($it)") }
+                    }
+
+                    // Multi-frame accumulation count
+                    if (multiFrameCount > 0) {
+                        append(" | MF: $multiFrameCount/20")
+                    }
                 },
                 color = Color.White,
                 style = MaterialTheme.typography.labelSmall,
