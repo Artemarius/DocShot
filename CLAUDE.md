@@ -85,6 +85,7 @@ app/src/main/java/com/docshot/
 - Full capture pipeline: < 200ms (detect + warp + save)
 - Memory: < 150MB including camera buffers
 - Profile with `System.nanoTime()` around key operations, log in debug
+- **Validated on S21 (Snapdragon 888):** KLT-only 2.1ms median, KLT+correction 11.8ms median, 97.2% of tracked frames under 30ms. No-doc scanning ~30ms (exhausts all strategies). Capture pipeline 478ms total (307ms JPEG decode, ~88ms CV).
 
 ## Key Dependencies (versions pinned in gradle/libs.versions.toml)
 - AGP: 8.7.3

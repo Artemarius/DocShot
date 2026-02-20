@@ -50,7 +50,9 @@ data class DetectionResult(
  */
 data class DetectionStatus(
     val result: DocumentCorners?,
-    val isPartialDocument: Boolean
+    val isPartialDocument: Boolean,
+    /** Total detection time in ms, always populated regardless of whether a document was found. */
+    val detectionMs: Double = 0.0
 )
 
 // Module-level MatPool shared across strategy attempts within a single detection call.
@@ -128,7 +130,7 @@ fun detectDocumentWithStatus(input: Mat): DetectionStatus {
         val ms = (System.nanoTime() - start) / 1_000_000.0
         Log.d(TAG, "Detection suppressed: confidence %.2f < %.2f threshold (%.1f ms)".format(
             bestResult.confidence, MIN_CONFIDENCE_THRESHOLD, ms))
-        return DetectionStatus(result = null, isPartialDocument = anyPartialDocument)
+        return DetectionStatus(result = null, isPartialDocument = anyPartialDocument, detectionMs = ms)
     }
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
@@ -136,12 +138,12 @@ fun detectDocumentWithStatus(input: Mat): DetectionStatus {
         // Update detection time to include the full multi-strategy cost
         val finalResult = bestResult.copy(detectionMs = ms)
         Log.d(TAG, "detectDocument: %.1f ms, confidence: %.2f".format(ms, finalResult.confidence))
-        return DetectionStatus(result = finalResult, isPartialDocument = anyPartialDocument)
+        return DetectionStatus(result = finalResult, isPartialDocument = anyPartialDocument, detectionMs = ms)
     }
 
     Log.d(TAG, "detectDocument: %.1f ms — no document found across %d strategies".format(
         ms, strategies.size))
-    return DetectionStatus(result = null, isPartialDocument = anyPartialDocument)
+    return DetectionStatus(result = null, isPartialDocument = anyPartialDocument, detectionMs = ms)
 }
 
 /**

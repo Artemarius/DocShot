@@ -119,7 +119,7 @@ class FrameAnalyzer(
             val status = if (runDetection) detectDocumentWithStatus(downscaled) else null
             val detection = status?.result
 
-            var detectionMs = detection?.detectionMs ?: 0.0
+            val detectionMs = status?.detectionMs ?: 0.0
 
             // Scale detected corners back to original analysis dimensions
             val rawDetectedCorners = detection?.corners?.map { pt ->
