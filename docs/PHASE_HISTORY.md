@@ -266,6 +266,10 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - No-doc detection: 30.4ms median (exhausts 4 strategies; non-critical path)
 - Post-profiling fixes: `DetectionStatus.detectionMs` logging corrected (was 0.0 for no-doc frames), `MultiFrameAspectEstimator` result cached after first solve (eliminated ~2,400 redundant SVD solves per session)
 
+### Post-v1.2.0 Hotfixes (On-Device Testing)
+- **Auto-capture KLT confidence fix:** KLT-only frames injected `confidence=0.0` into smoother, keeping average at ~0.32 (below 0.65 threshold). Auto-capture could never fire during KLT tracking. Fix: carry forward last detection confidence for tracked frames.
+- **Single-frame AR estimation:** Multi-frame Zhang's method degenerate during stabilization (stationary camera → identical homographies → garbage ratios 0.01-0.85). Switched to single-frame dual-regime estimation on full-res capture corners with camera intrinsics. Validated on 11×22cm letter: estimates within 2% of true ratio (0.500).
+
 ---
 
 ## Dropped: ML-Enhanced Detection (originally planned Phase 9)
