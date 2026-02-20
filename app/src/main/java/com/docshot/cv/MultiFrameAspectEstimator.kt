@@ -53,6 +53,10 @@ class MultiFrameAspectEstimator {
     /** Accumulated homographies (document corners -> unit square). */
     private val homographies = mutableListOf<Mat>()
 
+    /** Cached estimate — invalidated on addFrame() or reset(). */
+    private var cachedEstimate: MultiFrameEstimate? = null
+    private var cacheValid = false
+
     /** Number of accumulated frames. */
     val frameCount: Int get() = homographies.size
 
@@ -81,6 +85,7 @@ class MultiFrameAspectEstimator {
         try {
             val H = Imgproc.getPerspectiveTransform(srcPts, dstPts)
             homographies.add(H)
+            cacheValid = false
             Log.d(TAG, "Added frame ${homographies.size}")
         } finally {
             srcPts.release()
@@ -109,13 +114,20 @@ class MultiFrameAspectEstimator {
             return null
         }
 
+        // Return cached result if data hasn't changed since last solve
+        if (cacheValid) return cachedEstimate
+
         // If intrinsics are available, use the simpler decomposition approach
-        if (intrinsics != null) {
-            return estimateWithIntrinsics(intrinsics)
+        val result = if (intrinsics != null) {
+            estimateWithIntrinsics(intrinsics)
+        } else {
+            // Otherwise, solve for omega via Zhang's method
+            estimateViaZhang()
         }
 
-        // Otherwise, solve for omega via Zhang's method
-        return estimateViaZhang()
+        cachedEstimate = result
+        cacheValid = true
+        return result
     }
 
     /**
@@ -330,6 +342,8 @@ class MultiFrameAspectEstimator {
         val count = homographies.size
         homographies.forEach { it.release() }
         homographies.clear()
+        cachedEstimate = null
+        cacheValid = false
         Log.d(TAG, "Reset (cleared $count homographies)")
     }
 
@@ -337,5 +351,7 @@ class MultiFrameAspectEstimator {
     fun release() {
         homographies.forEach { it.release() }
         homographies.clear()
+        cachedEstimate = null
+        cacheValid = false
     }
 }
