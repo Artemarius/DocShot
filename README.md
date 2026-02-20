@@ -2,8 +2,9 @@
 
 Zero-tap document scanning for Android. Point your camera at a document — DocShot automatically detects the boundary, captures when stable, corrects perspective distortion, and saves a clean rectangular image. No corner dragging, no multi-step workflows.
 
-<!-- TODO: Add demo GIF here -->
-<!-- ![DocShot demo](docs/demo.gif) -->
+<p align="center">
+  <img src="docs/demo.gif" alt="DocShot demo" width="300">
+</p>
 
 ## Motivation
 
