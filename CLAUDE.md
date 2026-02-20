@@ -1,14 +1,13 @@
 # DocShot — CLAUDE.md
 
 ## Project Overview
-Android document rectification app. Camera input → automatic document boundary detection → perspective correction → clean rectangular output. Zero user interaction beyond shutter tap.
+Android document rectification app. Camera input -> automatic document boundary detection -> perspective correction -> clean rectangular output. Zero user interaction beyond shutter tap.
 
 ## Tech Stack
 - **Language:** Kotlin (idiomatic, no Java fallbacks)
 - **UI:** Jetpack Compose + Material 3
 - **Camera:** CameraX with Camera2 backend
 - **CV:** OpenCV Android SDK 4.10+
-- **ML:** Dropped — classical CV pipeline is production-ready without it
 - **Build:** Gradle Kotlin DSL, AGP 8.x
 - **Min SDK:** 24 / Target SDK: 34
 - **Test device:** Samsung Galaxy S21 (Snapdragon 888)
@@ -16,16 +15,15 @@ Android document rectification app. Camera input → automatic document boundary
 ## Architecture Rules
 - MVVM with ViewModels for camera and processing state
 - CV pipeline runs entirely off the main thread (coroutines + Dispatchers.Default)
-- OpenCV Mat objects must be explicitly released — no relying on GC
+- OpenCV Mat objects must be explicitly released -- no relying on GC
 - CameraX ImageAnalysis runs at STRATEGY_KEEP_ONLY_LATEST to avoid frame queue buildup
 - Separate detection (runs every frame, must be <30ms) from rectification (runs once on capture, can take up to 200ms)
-- All OpenCV calls go through Kotlin wrapper functions in the `cv/` package — no raw OpenCV calls in UI or camera code
+- All OpenCV calls go through Kotlin wrapper functions in the `cv/` package -- no raw OpenCV calls in UI or camera code
 
 ## Build & Run
 ```bash
 ./gradlew assembleDebug
 ./gradlew installDebug
-# Run tests:
 ./gradlew testDebugUnitTest
 ```
 
@@ -40,27 +38,43 @@ Android document rectification app. Camera input → automatic document boundary
 ## CV Pipeline Specifics
 - Canny thresholds: auto-compute from median intensity (0.67*median, 1.33*median)
 - Contour filtering: reject contours < 10% of image area, require 4-point polygon approximation with epsilon = 2-5% of arc length
-- Quadrilateral scoring: weighted combination of area (largest preferred), convexity (must be convex), angle regularity (prefer ~90° corners)
-- Corner ordering: consistent top-left, top-right, bottom-right, bottom-left based on sum/difference of coordinates
+- Quadrilateral scoring: `(0.6 * quadScore + 0.4 * edgeDensity) * marginFactor`
+- Corner ordering: consistent TL, TR, BR, BL based on sum/difference of coordinates
 - Output dimensions: derive from longest edge pairs to preserve document aspect ratio
 - Always use `Imgproc.INTER_CUBIC` for the final warp, `INTER_LINEAR` for preview
+- 5 preprocessing strategies (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) with scene analysis and 25ms time budget
 
 ## File Structure
 ```
 app/src/main/java/com/docshot/
 ├── ui/          # Compose screens + navigation
-├── camera/      # CameraX setup, frame analysis
+├── camera/      # CameraX setup, frame analysis, QuadSmoother
 ├── cv/          # Document detection, rectification, post-processing
-└── util/        # Permissions, image I/O, gallery save
+└── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
-## Phase Boundaries
-- **Phase 1-9:** Classical CV pipeline + flash/capture UX, fully complete
-- **Phase 10:** Lighting gradient correction — complete ("Even Light" filter)
-- **Phase 11:** Capture UX & auto-capture quality — freeze overlay + auto-capture hardening + AF lock complete; aspect ratio slider remaining; quad tracking deprioritized
-- **Phase 12:** Google Play release — app icon + splash screen complete; privacy policy, signing config, store listing text, README polish complete; keystore generated + signed AAB built (63MB bundle, ~26MB per-device); GitHub Pages enabled for privacy policy; v1.1.0 released (versionCode 2) with UX polish; remaining: Play Console forms (screenshots, content rating, data safety), demo media, submit for review
-- **UX Polish (v1.1.0):** Flash persistence across captures, A4 default aspect ratio, aspect ratio lock — complete
-- **No-Camera Fallback (v1.1.2):** Graceful handling of devices without camera hardware (emulators, tablets). Manifest camera feature marked optional (`required="false"`), auto-selects Import tab when no camera detected, Camera tab hidden, defensive guard in CameraPermissionScreen. Enables Play Store screenshot capture on no-camera emulators.
+## Current State (v1.1.2)
+- **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light), 74 tests (47 unit + 27 instrumented). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
+- **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
+- **v1.2.0 planned.** KLT corner tracking + multi-frame aspect ratio estimation. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+
+## Key Architecture Details (for current work)
+
+### Auto-Capture Pipeline
+- `QuadSmoother`: buffers last 5 detections, 20-frame stability threshold, three-tier drift response (<2.5% increment, 2.5-10% halve, >10% hard reset), pre-smoothing jump detection at 10%
+- `FrameAnalyzer`: runs `DocumentDetector` per frame at 640px, adaptive frame skipping (tiers at 5 and 15 consecutive misses)
+- AF lock triggers at 50% stability (10/20 frames), auto-capture fires at 100% + confidence >= 0.65 + 1.5s warmup
+- `CaptureProcessor`: re-detects on full-res capture frame, validates against preview corners (5% drift tolerance)
+
+### Aspect Ratio (current -- single-frame only)
+- `AspectRatioEstimator`: edge-length ratio + format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography error disambiguation when intrinsics available
+- Camera intrinsics: `LENS_INTRINSIC_CALIBRATION` (API 28+) or sensor-size fallback
+- ResultScreen defaults to A4 (0.707), slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
+
+### Confidence Thresholds
+- < 0.35: suppressed (no detection returned)
+- 0.35-0.65: routes to manual corner adjustment
+- >= 0.65: auto-capture eligible, result shown directly
 
 ## Performance Budget
 - Detection per frame: < 30ms (for real-time preview overlay)
@@ -94,19 +108,6 @@ app/src/main/java/com/docshot/
 | `PATH` (appended) | `D:\Android\Sdk\platform-tools` |
 
 ### Notes
-- C: drive has limited space — all SDK/build artifacts go on D:
+- C: drive has limited space -- all SDK/build artifacts go on D:
 - No standalone JDK installed; using Android Studio's bundled JBR 21
 - Test device: Samsung Galaxy S21 via USB debugging
-- Phase 1 complete: project skeleton builds, CameraX preview + OpenCV init working
-- Phase 2 complete: full classical CV pipeline (detect + rectify) working on static images, 10 unit tests passing
-- Phase 3 complete: real-time detection works well on dark/uniform backgrounds; fails on cluttered or low-contrast (light) backgrounds — deferred to Phase 7
-- Phase 4 complete: capture & rectify flow — tap shutter FAB → full-res pipeline (YUV→BGR → rotate → detect → sub-pixel refine → rectify) → result screen with original/rectified toggle, save to gallery (MediaStore), share via FileProvider. CameraX 3-use-case binding (Preview + ImageAnalysis + ImageCapture) with graceful fallback.
-- Phase 5 complete: gallery import via system photo picker (PickVisualMedia, no permissions needed) + manual corner adjustment with draggable handles and magnifier loupe. EXIF rotation handling, downscale to 4000px max. Detection downscaled to ~1000px for reliable kernel matching. Fixed capture crash on S21/Android 15 — ImageCapture returns JPEG (1 plane), not YUV; now handles both formats. Tab 1 replaced from Pipeline Test to Import; gallery button added on CameraScreen.
-- Phase 6 complete: auto-capture (stability detection in QuadSmoother, 15 consecutive frames with <2% corner drift), visual feedback (green→cyan quad with progressive fill opacity), haptic on capture (CONFIRM on API 30+, LONG_PRESS fallback), auto-capture toggle FAB. Post-processing filters on ResultScreen (B&W adaptive threshold, CLAHE contrast, gray-world white balance) with async processing. Document orientation detection (Sobel gradient analysis + ink-density heuristic) integrated into capture pipeline. Settings screen with DataStore (auto-capture, haptic, debug overlay, output format/quality, default filter). Custom DocShot brand color scheme (teal/cyan primary, dark theme optimized for camera). App icon and splash screen deferred to Phase 10.
-- Phase 7 complete: robustness & edge case handling. Group A: per-detection confidence scoring (60% quad score + 20% area ratio + 20% edge density), edge-density validation via QuadValidator, suppression threshold at 0.35. Group B: low-confidence fallback to manual corner adjustment (0.35–0.65), "Point at a document" hint, auto-capture gated to high-confidence (>=0.65), multi-candidate score-margin penalty. Group C: multi-strategy preprocessing (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) with scene analysis and 25ms budget, small document support (2% min area, aspect-ratio scoring), partial document detection with "Move back" hint. Group D: expanded test coverage — 21 instrumented regression tests (SyntheticImageFactory with 7 corner presets + 10 image generators), 17 QuadScoringTest unit tests. All Phase 7 roadmap items complete. Total: 32 unit tests + 21 instrumented tests = 53 tests.
-- Phase 8 complete: performance optimization. Group A: ABI splits (arm64/armv7) + R8 minification + resource shrinking — arm64 release APK 26MB (down from 59MB). Group B: MatPool utility for detection hot path, cached structuring kernels in EdgeDetector, shared grayscale conversion between analyzeScene and preprocessing. Group C: adaptive frame skipping (skip every other frame after 5 consecutive misses, 2-of-3 after 15 misses), scene analysis caching across 10 frames. Group D: reduced intermediate Mats in PostProcessor (RGBA→gray direct, single convertTo for clip+clamp), try/finally exception safety in detectWithStrategy. Total: 35 unit tests + 21 instrumented tests = 56 tests.
-- Phase 9 complete: flash support + capture quality/UX fixes. Flash toggle (torch mode via CameraX, persisted in DataStore settings, torch off during capture but logical state preserved — re-enables on return to camera). Capture pipeline reworked: always re-detects on capture frame, validates against preview corners (orderCorners fixes rotation-induced ordering), prefers preview corners when re-detection deviates >5% (routes to adjustment), trusts max(preview, redetect) confidence when quads agree. OrientationDetector: ambiguous vertical text defaults to CORRECT instead of ROTATE_90. QuadSmoother: stableThreshold 8→10, average corner drift instead of max (one jittery corner no longer blocks stability). Split confidence thresholds: auto-capture fires at ≥0.65, result routing at ≥0.65 (matched — if trusted enough to auto-capture, trusted enough to show result). ResultScreen: quad overlay on original view, Adjust/Rotate buttons, filter reset on data change. CameraScreen: freeze overlay (dark scrim + frozen quad + status text) during Capturing/Processing instead of continuing live preview. Preferences wired through to CameraScreen for flash persistence.
-- Phase 10 complete: lighting gradient correction — replaced gray-world white balance ("Color Fix") with low-frequency illumination estimation ("Even Light"). Algorithm: LAB color space → downsample L by 8x → heavy Gaussian blur (51x51) → upsample → divide original L by estimated illumination → rescale to original mean. Corrects brightness gradients from angled lighting while preserving color (A/B untouched). Bugfixes: cornerSubPix bounds clamping (preview corners at image edge caused assertion failure), full-frame quad rejection in ContourFinder (quad spanning all 4 edges is the image border, not a document). 4 new instrumented tests + 1 new unit test. Total: 36 unit tests + 25 instrumented tests = 61 tests.
-- Phase 11 complete: 11A + 11A+ + 11B + 11C. Freeze overlay fixed (analyzer guard + 75% scrim). Auto-capture hardened: 1.5s warmup suppression, stableThreshold 10→20, three-tier drift response (increment/halve/hard-reset), pre-smoothing jump detection (>10% deviation clears buffer), confidence formula rebalanced (removed area double-counting, edge density 20%→40%). Debug overlay added (stable N/20, conf, warmup, AF state, READY). 11C: AF lock during auto-capture — at 50% stability (10/20 frames) triggers one-shot center AF via FocusMeteringAction (FLAG_AF + disableAutoCancel), auto-capture gated on AF lock confirmation, AF cancelled on quad loss / enterIdle to restore continuous AF. Manual shutter unaffected. 11B: Aspect ratio slider on ResultScreen — auto-detection via known-format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography decomposition verification using camera intrinsics (Camera2 interop). Manual slider (0.25–1.0) with 300ms debounce re-warp from original image. Format label reactive to slider position + dropdown for pre-selection. Camera intrinsics extracted via LENS_INTRINSIC_CALIBRATION (API 28+) with focal-length fallback. Rotation preserved across re-warps (autoRotationSteps + manualRotationSteps stored in CaptureResultData). ResultScreen UI compacted: tab row hidden during result, Scaffold replaced with plain Column, Rotate/Adjust moved to TopAppBar. Gradient-based quad tracking (11D) deprioritized — smoother hardening is sufficient for v1. 11 new unit tests + 2 new instrumented tests. Total: 47 unit tests + 27 instrumented tests = 74 tests.
-- Phase 12 in progress: app icon + splash screen. Adaptive icon (API 26+): vector background (dark teal diagonal gradient) + vector foreground (white trapezoid document with corner fold, cyan scan-line, text-suggestion lines). Legacy PNG icons (API 24-25) at mdpi–xxxhdpi. AndroidX SplashScreen library (core-splashscreen 1.0.1): Theme.DocShot.Splash with dark teal background + foreground icon, installSplashScreen() before super.onCreate(). colors.xml added for splash theme colors. Manifest updated with icon/roundIcon + splash theme. Release signing config added (keystore.properties pattern, gitignored). Privacy policy created (docs/privacy-policy.html for GitHub Pages). Store listing text drafted. README polished with full feature set. Keystore generated (RSA 2048, 10000-day validity). Signed AAB built (63MB bundle, ~26MB per-device via Play Store ABI splitting). Build fix: explicit `import java.util.Properties` in app/build.gradle.kts (inline `java.util.Properties()` failed to resolve in Gradle 8.10.2 script compilation). Version bumped to 1.1.0 (versionCode 2), tagged v1.1.0 with GitHub release. Remaining: Play Console forms (screenshots, content rating, data safety), demo media, submit for review.
-- UX Polish complete: flash persistence + A4 default + aspect ratio lock. Flash: torch turns off physically during capture but logical state preserved in ViewModel, re-enables via enterIdle() on return to camera; toggle persists to DataStore immediately. A4 default: ResultScreen initializes currentRatio to 0.707f (A4) instead of per-scan auto-detection; pendingRatio initialized to trigger first-composition re-warp. Aspect ratio lock: new DataStore keys (aspectRatioLocked, lockedAspectRatio) in DocShotSettings, Lock/LockOpen icon button on ResultScreen left of format label, slider + dropdown disabled when locked, lock state persisted and respected across camera captures and gallery imports (wired through CameraScreen, GalleryScreen, MainActivity). Blur detection deferred to v1.2+ (Laplacian variance sharpness scoring). Total: 47 unit tests + 27 instrumented tests = 74 tests (unchanged).
