@@ -44,15 +44,20 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -207,6 +212,13 @@ fun CameraPreview(
         val isIdle = cameraState is CameraUiState.Idle
         val isBusy = cameraState is CameraUiState.Capturing || cameraState is CameraUiState.Processing
 
+        var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+
+        // Snapshot the preview bitmap exactly when the freeze overlay appears
+        val frozenPreviewBitmap = remember(isBusy) {
+            if (isBusy) previewViewRef?.getBitmap()?.asImageBitmap() else null
+        }
+
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
@@ -215,6 +227,7 @@ fun CameraPreview(
                 }
 
                 bindCamera(ctx, lifecycleOwner, previewView, viewModel, analysisExecutor)
+                previewViewRef = previewView
 
                 previewView
             },
@@ -240,6 +253,7 @@ fun CameraPreview(
             // Show the frozen quad from the last detection state
             QuadOverlay(
                 detectionState = detectionState,
+                frozenPreviewBitmap = frozenPreviewBitmap,
                 modifier = Modifier.fillMaxSize()
             )
             Text(
@@ -586,7 +600,8 @@ private fun extractCameraIntrinsics(
 @Composable
 private fun QuadOverlay(
     detectionState: DetectionUiState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    frozenPreviewBitmap: ImageBitmap? = null
 ) {
     val corners = detectionState.normalizedCorners ?: return
     val srcW = detectionState.sourceWidth
@@ -643,6 +658,13 @@ private fun QuadOverlay(
                 lineTo(p.x, p.y)
             }
             close()
+        }
+
+        // Draw frozen preview clipped to quad (capture freeze only)
+        if (frozenPreviewBitmap != null) {
+            clipPath(path) {
+                drawImage(image = frozenPreviewBitmap, alpha = 0.7f)
+            }
         }
 
         // Draw fill (builds up as stability progresses)

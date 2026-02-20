@@ -272,6 +272,19 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 
 ---
 
+## Post-v1.2.0: Capture Preview Overlay
+
+**Goal:** Show the actual document image inside the frozen quad overlay during capture, giving instant visual feedback of what was captured.
+
+- `PreviewView.getBitmap()` snapshot captured at freeze start via `remember(isBusy)`
+- Bitmap drawn clipped to quad path at 70% alpha, layered under existing cyan fill
+- Layering (bottom to top): dark scrim (75%) → document texture (70% alpha) → cyan fill (15% alpha) → stroke + corner dots
+- Single-file change (`CameraScreen.kt`): added `previewViewRef` state, `frozenPreviewBitmap` snapshot, `frozenPreviewBitmap` parameter on `QuadOverlay`, `clipPath`+`drawImage` in Canvas
+- No ViewModel modifications, no new tests (pure UI composable change)
+- Graceful fallback: if `getBitmap()` returns null (preview not ready), overlay renders as before (cyan fill only)
+
+---
+
 ## Dropped: ML-Enhanced Detection (originally planned Phase 9)
 
 The classical CV pipeline with Phase 7 robustness improvements handles real-world documents reliably. ML segmentation would add complexity (TFLite dependency, model size, maintenance) without meaningful improvement. Revisitable if edge cases arise.
