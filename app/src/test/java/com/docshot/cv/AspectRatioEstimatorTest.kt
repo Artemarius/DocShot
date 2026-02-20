@@ -6,8 +6,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Test
+import org.opencv.core.CvType
 import org.opencv.core.Point
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 class AspectRatioEstimatorTest {
 
@@ -28,7 +30,7 @@ class AspectRatioEstimatorTest {
             }
         }
 
-        /** Creates a perfect rectangle with given width/height centered at origin. */
+        /** Creates a perfect rectangle with given width/height at (0,0). */
         private fun makeRect(w: Double, h: Double): List<Point> {
             return listOf(
                 Point(0.0, 0.0),      // TL
@@ -37,7 +39,48 @@ class AspectRatioEstimatorTest {
                 Point(0.0, h)         // BL
             )
         }
+
+        /** Creates a trapezoid by shifting the top edge inward symmetrically. */
+        private fun makeTrapezoid(
+            w: Double,
+            h: Double,
+            topInset: Double
+        ): List<Point> {
+            return listOf(
+                Point(topInset, 0.0),          // TL
+                Point(w - topInset, 0.0),      // TR
+                Point(w, h),                   // BR
+                Point(0.0, h)                  // BL
+            )
+        }
+
+        /** Creates a heavily skewed trapezoid (perspective distortion). */
+        private fun makeHeavyTrapezoid(
+            w: Double,
+            h: Double,
+            topInset: Double,
+            bottomInset: Double
+        ): List<Point> {
+            return listOf(
+                Point(topInset, 0.0),              // TL
+                Point(w - topInset, 0.0),          // TR
+                Point(w - bottomInset, h),         // BR
+                Point(bottomInset, h)              // BL
+            )
+        }
+
+        /** Synthetic camera intrinsics for testing. */
+        private val TEST_INTRINSICS = CameraIntrinsics(
+            fx = 1000.0,
+            fy = 1000.0,
+            cx = 320.0,
+            cy = 240.0
+        )
     }
+
+    // =======================================================================
+    // Existing tests (pre-B1)
+    // =======================================================================
 
     @Test
     fun `computeRawRatio returns ~0_707 for A4 rectangle`() {
@@ -136,5 +179,454 @@ class AspectRatioEstimatorTest {
             "Ratio should be close to A4",
             abs(estimate.estimatedRatio - 1.0 / 1.414) < 0.01
         )
+    }
+
+    // =======================================================================
+    // B1: Hartley Normalization tests
+    // =======================================================================
+
+    @Test
+    fun `hartleyNormalize centroid is at origin`() {
+        val corners = listOf(
+            Point(100.0, 200.0),
+            Point(300.0, 200.0),
+            Point(300.0, 400.0),
+            Point(100.0, 400.0)
+        )
+
+        val (normalized, T) = hartleyNormalize(corners)
+        try {
+            val cx = normalized.map { it.x }.average()
+            val cy = normalized.map { it.y }.average()
+            assertEquals("Centroid X should be ~0", 0.0, cx, 1e-10)
+            assertEquals("Centroid Y should be ~0", 0.0, cy, 1e-10)
+        } finally {
+            T.release()
+        }
+    }
+
+    @Test
+    fun `hartleyNormalize average distance is sqrt(2)`() {
+        val corners = listOf(
+            Point(100.0, 200.0),
+            Point(300.0, 200.0),
+            Point(300.0, 400.0),
+            Point(100.0, 400.0)
+        )
+
+        val (normalized, T) = hartleyNormalize(corners)
+        try {
+            val avgDist = normalized.map { sqrt(it.x * it.x + it.y * it.y) }.average()
+            assertEquals("Average distance should be sqrt(2)", sqrt(2.0), avgDist, 1e-10)
+        } finally {
+            T.release()
+        }
+    }
+
+    @Test
+    fun `hartleyNormalize transform matrix is 3x3 CV_64FC1`() {
+        val corners = makeRect(200.0, 300.0)
+
+        val (_, T) = hartleyNormalize(corners)
+        try {
+            assertEquals("Rows should be 3", 3, T.rows())
+            assertEquals("Cols should be 3", 3, T.cols())
+            assertEquals("Type should be CV_64FC1", CvType.CV_64FC1, T.type())
+        } finally {
+            T.release()
+        }
+    }
+
+    @Test
+    fun `hartleyNormalize transform matrix matches expected structure`() {
+        val corners = listOf(
+            Point(100.0, 200.0),
+            Point(300.0, 200.0),
+            Point(300.0, 400.0),
+            Point(100.0, 400.0)
+        )
+
+        val cx = corners.map { it.x }.average()
+        val cy = corners.map { it.y }.average()
+        val centered = corners.map { Point(it.x - cx, it.y - cy) }
+        val avgDist = centered.map { sqrt(it.x * it.x + it.y * it.y) }.average()
+        val expectedScale = sqrt(2.0) / avgDist
+
+        val (_, T) = hartleyNormalize(corners)
+        try {
+            // T = [[scale, 0, -scale*cx], [0, scale, -scale*cy], [0, 0, 1]]
+            assertEquals("T[0,0] should be scale", expectedScale, T.get(0, 0)[0], 1e-10)
+            assertEquals("T[0,1] should be 0", 0.0, T.get(0, 1)[0], 1e-10)
+            assertEquals("T[0,2] should be -scale*cx", -expectedScale * cx, T.get(0, 2)[0], 1e-10)
+            assertEquals("T[1,0] should be 0", 0.0, T.get(1, 0)[0], 1e-10)
+            assertEquals("T[1,1] should be scale", expectedScale, T.get(1, 1)[0], 1e-10)
+            assertEquals("T[1,2] should be -scale*cy", -expectedScale * cy, T.get(1, 2)[0], 1e-10)
+            assertEquals("T[2,0] should be 0", 0.0, T.get(2, 0)[0], 1e-10)
+            assertEquals("T[2,1] should be 0", 0.0, T.get(2, 1)[0], 1e-10)
+            assertEquals("T[2,2] should be 1", 1.0, T.get(2, 2)[0], 1e-10)
+        } finally {
+            T.release()
+        }
+    }
+
+    @Test
+    fun `hartleyNormalize applies transform correctly to points`() {
+        // Verify T * [x, y, 1]^T gives the normalized point
+        val corners = listOf(
+            Point(50.0, 100.0),
+            Point(250.0, 110.0),
+            Point(240.0, 350.0),
+            Point(60.0, 340.0)
+        )
+
+        val (normalized, T) = hartleyNormalize(corners)
+        try {
+            for (i in corners.indices) {
+                val orig = corners[i]
+                val norm = normalized[i]
+                // T * [x, y, 1]^T
+                val tx = T.get(0, 0)[0] * orig.x + T.get(0, 1)[0] * orig.y + T.get(0, 2)[0]
+                val ty = T.get(1, 0)[0] * orig.x + T.get(1, 1)[0] * orig.y + T.get(1, 2)[0]
+                assertEquals("Transformed X[$i] should match", norm.x, tx, 1e-10)
+                assertEquals("Transformed Y[$i] should match", norm.y, ty, 1e-10)
+            }
+        } finally {
+            T.release()
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `hartleyNormalize rejects non-4-point input`() {
+        hartleyNormalize(listOf(Point(0.0, 0.0), Point(1.0, 0.0), Point(1.0, 1.0)))
+    }
+
+    // =======================================================================
+    // B2: Perspective Severity Classifier tests
+    // =======================================================================
+
+    @Test
+    fun `perspectiveSeverity returns ~0 for perfect rectangle`() {
+        val corners = makeRect(200.0, 300.0)
+        val severity = perspectiveSeverity(corners)
+        assertEquals("Perfect rectangle should have ~0 severity", 0.0, severity, 0.5)
+    }
+
+    @Test
+    fun `perspectiveSeverity returns ~0 for perfect square`() {
+        val corners = makeRect(200.0, 200.0)
+        val severity = perspectiveSeverity(corners)
+        assertEquals("Perfect square should have ~0 severity", 0.0, severity, 0.5)
+    }
+
+    @Test
+    fun `perspectiveSeverity returns low value for mild trapezoid`() {
+        // Mild perspective: top edge slightly shorter (small inset)
+        val corners = makeTrapezoid(w = 300.0, h = 400.0, topInset = 15.0)
+        val severity = perspectiveSeverity(corners)
+        assertTrue(
+            "Mild trapezoid severity ($severity) should be < 15 degrees",
+            severity < 15.0
+        )
+        assertTrue(
+            "Mild trapezoid severity ($severity) should be > 0",
+            severity > 0.0
+        )
+    }
+
+    @Test
+    fun `perspectiveSeverity returns high value for heavy trapezoid`() {
+        // Heavy perspective: top edge much shorter
+        val corners = makeTrapezoid(w = 300.0, h = 300.0, topInset = 100.0)
+        val severity = perspectiveSeverity(corners)
+        assertTrue(
+            "Heavy trapezoid severity ($severity) should be > 20 degrees",
+            severity > 20.0
+        )
+    }
+
+    @Test
+    fun `perspectiveSeverity increases with more perspective distortion`() {
+        val mild = makeTrapezoid(w = 300.0, h = 400.0, topInset = 10.0)
+        val moderate = makeTrapezoid(w = 300.0, h = 400.0, topInset = 40.0)
+        val heavy = makeTrapezoid(w = 300.0, h = 400.0, topInset = 80.0)
+
+        val mildSeverity = perspectiveSeverity(mild)
+        val moderateSeverity = perspectiveSeverity(moderate)
+        val heavySeverity = perspectiveSeverity(heavy)
+
+        assertTrue(
+            "Moderate ($moderateSeverity) > mild ($mildSeverity)",
+            moderateSeverity > mildSeverity
+        )
+        assertTrue(
+            "Heavy ($heavySeverity) > moderate ($moderateSeverity)",
+            heavySeverity > moderateSeverity
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `perspectiveSeverity rejects non-4-point input`() {
+        perspectiveSeverity(listOf(Point(0.0, 0.0)))
+    }
+
+    // =======================================================================
+    // B3: Angular Corrected Ratio tests
+    // =======================================================================
+
+    @Test
+    fun `angularCorrectedRatio returns raw ratio for perfect rectangle`() {
+        // For a perfect rectangle, convergence angles are 0, so correction factor = 1.0
+        val corners = makeRect(210.0, 297.0)
+        val corrected = angularCorrectedRatio(corners)
+        val raw = computeRawRatio(corners)
+        assertEquals("Correction should be identity for rectangle", raw, corrected, 0.001)
+    }
+
+    @Test
+    fun `angularCorrectedRatio close to raw for near-frontal quad`() {
+        // Very mild perspective: top edge shifted by 5px
+        val corners = listOf(
+            Point(5.0, 0.0),       // TL
+            Point(215.0, 0.0),     // TR
+            Point(210.0, 297.0),   // BR
+            Point(0.0, 297.0)      // BL
+        )
+        val corrected = angularCorrectedRatio(corners)
+        val raw = computeRawRatio(corners)
+        val pctDiff = abs(corrected - raw) / raw * 100.0
+        assertTrue(
+            "Correction should be < 2% for near-frontal quad (was $pctDiff%)",
+            pctDiff < 2.0
+        )
+    }
+
+    @Test
+    fun `angularCorrectedRatio is within valid range`() {
+        val corners = makeTrapezoid(w = 300.0, h = 400.0, topInset = 50.0)
+        val corrected = angularCorrectedRatio(corners)
+        assertTrue("Corrected ratio should be >= 0.1", corrected >= 0.1)
+        assertTrue("Corrected ratio should be <= 1.0", corrected <= 1.0)
+    }
+
+    @Test
+    fun `angularCorrectedRatio handles symmetric horizontal convergence`() {
+        // Symmetric trapezoid: top narrower than bottom
+        // This represents a document viewed from slightly above
+        val corners = listOf(
+            Point(30.0, 0.0),      // TL (inset)
+            Point(270.0, 0.0),     // TR (inset)
+            Point(300.0, 400.0),   // BR
+            Point(0.0, 400.0)      // BL
+        )
+        val corrected = angularCorrectedRatio(corners)
+        assertTrue("Corrected ratio should be positive", corrected > 0.0)
+        assertTrue("Corrected ratio should be <= 1.0", corrected <= 1.0)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `angularCorrectedRatio rejects non-4-point input`() {
+        angularCorrectedRatio(listOf(Point(0.0, 0.0), Point(1.0, 0.0)))
+    }
+
+    // =======================================================================
+    // B4: Projective Aspect Ratio tests
+    // =======================================================================
+
+    @Test
+    fun `projectiveAspectRatio returns reasonable value for A4 rectangle`() {
+        // Perfect A4 rectangle -- projective method should give ratio near 0.707
+        val corners = makeRect(210.0, 297.0)
+        val ratio = projectiveAspectRatio(corners, TEST_INTRINSICS)
+        assertNotNull("Should not return null for valid input", ratio)
+        assertEquals("Should be close to A4 ratio", 1.0 / 1.414, ratio!!, 0.1)
+    }
+
+    @Test
+    fun `projectiveAspectRatio returns value for perspective-distorted quad`() {
+        // A4 document viewed at an angle
+        val corners = listOf(
+            Point(80.0, 50.0),     // TL
+            Point(250.0, 70.0),    // TR
+            Point(240.0, 350.0),   // BR
+            Point(90.0, 330.0)     // BL
+        )
+        val ratio = projectiveAspectRatio(corners, TEST_INTRINSICS)
+        assertNotNull("Should produce a result for perspective quad", ratio)
+        assertTrue("Ratio ($ratio) should be > 0.1", ratio!! > 0.1)
+        assertTrue("Ratio ($ratio) should be <= 1.0", ratio <= 1.0)
+    }
+
+    @Test
+    fun `projectiveAspectRatio returns value in valid range for heavy skew`() {
+        // Heavily skewed quad
+        val corners = listOf(
+            Point(150.0, 20.0),    // TL
+            Point(280.0, 80.0),    // TR
+            Point(250.0, 380.0),   // BR
+            Point(50.0, 350.0)     // BL
+        )
+        val ratio = projectiveAspectRatio(corners, TEST_INTRINSICS)
+        if (ratio != null) {
+            assertTrue("Ratio ($ratio) should be > 0.05", ratio > 0.05)
+            assertTrue("Ratio ($ratio) should be <= 1.0", ratio <= 1.0)
+        }
+        // null is also acceptable if the computation fails for extreme input
+    }
+
+    @Test
+    fun `projectiveAspectRatio returns close to 1 for square`() {
+        val corners = makeRect(200.0, 200.0)
+        val ratio = projectiveAspectRatio(corners, TEST_INTRINSICS)
+        assertNotNull("Should not return null for square", ratio)
+        assertEquals("Square should give ratio near 1.0", 1.0, ratio!!, 0.15)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `projectiveAspectRatio rejects non-4-point input`() {
+        projectiveAspectRatio(
+            listOf(Point(0.0, 0.0)),
+            TEST_INTRINSICS
+        )
+    }
+
+    // =======================================================================
+    // B5: Dual-Regime Estimation tests
+    // =======================================================================
+
+    @Test
+    fun `estimateAspectRatioDualRegime uses angular for near-frontal rectangle`() {
+        // Perfect rectangle has 0 severity -> angular path
+        val corners = makeRect(210.0, 297.0)
+        val estimate = estimateAspectRatioDualRegime(corners)
+
+        assertNotNull("Should match a format", estimate.matchedFormat)
+        assertEquals("Should snap to A4", "A4", estimate.matchedFormat!!.name)
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime returns result for mild perspective`() {
+        // Mild trapezoid (severity < 15)
+        val corners = listOf(
+            Point(10.0, 0.0),      // TL
+            Point(220.0, 5.0),     // TR
+            Point(215.0, 300.0),   // BR
+            Point(5.0, 295.0)      // BL
+        )
+        val estimate = estimateAspectRatioDualRegime(corners)
+        assertTrue(
+            "Ratio (${estimate.estimatedRatio}) should be in valid range",
+            estimate.estimatedRatio in 0.1..1.0
+        )
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime handles transition zone`() {
+        // Create a quad with severity in 15-20 range
+        // A trapezoid with moderate convergence
+        val corners = makeTrapezoid(w = 300.0, h = 400.0, topInset = 35.0)
+        val severity = perspectiveSeverity(corners)
+
+        val estimate = estimateAspectRatioDualRegime(corners, TEST_INTRINSICS)
+        assertTrue(
+            "Ratio (${estimate.estimatedRatio}) should be in valid range",
+            estimate.estimatedRatio in 0.1..1.0
+        )
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime handles high severity with intrinsics`() {
+        // Heavy trapezoid (severity > 20)
+        val corners = makeTrapezoid(w = 300.0, h = 300.0, topInset = 100.0)
+        val severity = perspectiveSeverity(corners)
+        assertTrue(
+            "Severity ($severity) should be > 20 for this test",
+            severity > 20.0
+        )
+
+        val estimate = estimateAspectRatioDualRegime(corners, TEST_INTRINSICS)
+        assertTrue(
+            "Ratio (${estimate.estimatedRatio}) should be in valid range",
+            estimate.estimatedRatio in 0.1..1.0
+        )
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime falls back to angular without intrinsics`() {
+        // Heavy skew but no intrinsics -- should fall back to angular
+        val corners = makeTrapezoid(w = 300.0, h = 300.0, topInset = 100.0)
+        val estimate = estimateAspectRatioDualRegime(corners, intrinsics = null)
+        assertTrue(
+            "Ratio (${estimate.estimatedRatio}) should be in valid range",
+            estimate.estimatedRatio in 0.1..1.0
+        )
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime smooth transition no discontinuity`() {
+        // Test that ratios change smoothly as we vary the trapezoid inset
+        // from low severity through transition zone to high severity
+        val ratios = mutableListOf<Double>()
+        val severities = mutableListOf<Double>()
+
+        for (inset in listOf(5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 70.0, 85.0)) {
+            val corners = makeTrapezoid(w = 400.0, h = 400.0, topInset = inset)
+            val severity = perspectiveSeverity(corners)
+            val estimate = estimateAspectRatioDualRegime(corners, TEST_INTRINSICS)
+            ratios.add(estimate.estimatedRatio)
+            severities.add(severity)
+        }
+
+        // Check there are no large jumps between consecutive estimates
+        for (i in 1 until ratios.size) {
+            val jump = abs(ratios[i] - ratios[i - 1])
+            assertTrue(
+                "Jump between severity %.1f and %.1f should be < 0.3, was $jump"
+                    .format(severities[i - 1], severities[i]),
+                jump < 0.3
+            )
+        }
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime backward compatible with estimateAspectRatio`() {
+        // The two functions should return the same result since estimateAspectRatio
+        // now delegates to estimateAspectRatioDualRegime
+        val corners = makeRect(210.0, 297.0)
+
+        val oldResult = estimateAspectRatio(corners)
+        val newResult = estimateAspectRatioDualRegime(corners)
+
+        assertEquals(
+            "Both methods should return same ratio",
+            oldResult.estimatedRatio,
+            newResult.estimatedRatio,
+            1e-10
+        )
+        assertEquals(
+            "Both methods should match same format",
+            oldResult.matchedFormat,
+            newResult.matchedFormat
+        )
+    }
+
+    @Test
+    fun `estimateAspectRatioDualRegime snaps correctly for known formats`() {
+        // Test that format snapping still works through the dual-regime path
+        val a4 = makeRect(210.0, 297.0)
+        val letter = makeRect(8.5, 11.0)
+        val square = makeRect(200.0, 200.0)
+
+        val a4Est = estimateAspectRatioDualRegime(a4)
+        val letterEst = estimateAspectRatioDualRegime(letter)
+        val squareEst = estimateAspectRatioDualRegime(square)
+
+        assertEquals("A4", a4Est.matchedFormat?.name)
+        assertEquals("US Letter", letterEst.matchedFormat?.name)
+        assertEquals("Square", squareEst.matchedFormat?.name)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `estimateAspectRatioDualRegime rejects non-4-point input`() {
+        estimateAspectRatioDualRegime(emptyList())
     }
 }

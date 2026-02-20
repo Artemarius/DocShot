@@ -56,18 +56,19 @@ app/src/main/java/com/docshot/
 ## Current State (v1.1.2)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light), 86 tests (59 unit + 27 instrumented). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.0 in progress.** KLT corner tracking + multi-frame aspect ratio estimation. A1 (CornerTracker) complete; A2-A4 + WP-B/C remaining. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
+- **v1.2.0 in progress.** KLT corner tracking + multi-frame aspect ratio estimation. WP-A complete (A1-A4), B1-B6 complete; B7-B10 + WP-C remaining. See [PROJECT.md](PROJECT.md) for roadmap and [ASPECT_RATIO_PLAN.md](ASPECT_RATIO_PLAN.md) for technical design.
 
 ## Key Architecture Details (for current work)
 
 ### Auto-Capture Pipeline
 - `QuadSmoother`: buffers last 5 detections, 20-frame stability threshold, three-tier drift response (<2.5% increment, 2.5-10% halve, >10% hard reset), pre-smoothing jump detection at 10%
-- `FrameAnalyzer`: runs `DocumentDetector` per frame at 640px, adaptive frame skipping (tiers at 5 and 15 consecutive misses)
+- `FrameAnalyzer`: hybrid detect+track via `CornerTracker` (KLT on most frames, full detection every 3rd frame during tracking), adaptive frame skipping disabled during tracking
 - AF lock triggers at 50% stability (10/20 frames), auto-capture fires at 100% + confidence >= 0.65 + 1.5s warmup
 - `CaptureProcessor`: re-detects on full-res capture frame, validates against preview corners (5% drift tolerance)
 
-### Aspect Ratio (current -- single-frame only)
-- `AspectRatioEstimator`: edge-length ratio + format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography error disambiguation when intrinsics available
+### Aspect Ratio (dual-regime + multi-frame)
+- `AspectRatioEstimator`: dual-regime estimation — angular correction (<15deg severity) + projective decomposition (>20deg) + transition blending (15-20deg). Format snapping (A4, US Letter, ID Card, Business Card, Receipt, Square) + homography error disambiguation when intrinsics available
+- `MultiFrameAspectEstimator`: accumulates homographies during stabilization window, solves via Zhang's method (no intrinsics) or K_inv decomposition (with intrinsics), median aggregation, variance-based confidence
 - Camera intrinsics: `LENS_INTRINSIC_CALIBRATION` (API 28+) or sensor-size fallback
 - ResultScreen defaults to A4 (0.707), slider 0.25-1.0 with 300ms debounce re-warp, aspect ratio lock persisted in DataStore
 

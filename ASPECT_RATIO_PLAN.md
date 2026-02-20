@@ -12,13 +12,13 @@
 | Homography error disambiguation | Implemented (Phase 11B) | Uses camera intrinsics when available |
 | Camera intrinsics extraction | Implemented (Phase 11B) | LENS_INTRINSIC_CALIBRATION + focal-length fallback |
 | Aspect ratio slider + lock | Implemented (UX Polish) | 0.25-1.0 range, 300ms debounce, DataStore persistence |
-| Hartley normalization | **Planned (v1.2.0 B1)** | |
-| Perspective severity classifier | **Planned (v1.2.0 B2)** | |
-| Angular correction (low-severity) | **Planned (v1.2.0 B3)** | |
-| Projective VP estimation (high-severity) | **Planned (v1.2.0 B4)** | |
-| Transition-zone blending | **Planned (v1.2.0 B5)** | |
-| Multi-frame refinement | **Planned (v1.2.0 B6)** | |
-| KLT corner tracking (`CornerTracker`) | **A1 complete, A2-A4 planned** | State machine, KLT flow, convexity/area guards, 23 unit tests |
+| Hartley normalization | **Implemented (v1.2.0 B1)** | Centroid + sqrt(2) scaling, returns 3x3 transform Mat |
+| Perspective severity classifier | **Implemented (v1.2.0 B2)** | Max corner angle deviation from 90deg, thresholds 15/20deg |
+| Angular correction (low-severity) | **Implemented (v1.2.0 B3)** | cos(alpha_v/2) / cos(alpha_h/2) correction factor |
+| Projective VP estimation (high-severity) | **Implemented (v1.2.0 B4)** | K_inv * H decomposition, homogeneous coords throughout |
+| Transition-zone blending | **Implemented (v1.2.0 B5)** | Linear blend 15-20deg, `estimateAspectRatio()` delegates to dual-regime |
+| Multi-frame refinement | **Implemented (v1.2.0 B6)** | Zhang's method + intrinsics path, median aggregation, variance confidence |
+| KLT corner tracking (`CornerTracker`) | **A1-A4 complete** | State machine, KLT flow, hybrid detect+track in FrameAnalyzer, lifecycle wired |
 
 ---
 

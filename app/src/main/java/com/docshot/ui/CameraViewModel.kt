@@ -626,6 +626,8 @@ class CameraViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        // Release CornerTracker's native Mat resources
+        frameAnalyzer.releaseTracker()
         val state = _cameraState.value
         when (state) {
             is CameraUiState.Result -> {

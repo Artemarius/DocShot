@@ -49,14 +49,24 @@ class QuadSmoother(
         get() = if (confidenceBuffer.isEmpty()) 0.0
                 else confidenceBuffer.sum() / confidenceBuffer.size
 
+    /** Whether the last update was from KLT tracking (true) or full detection (false). */
+    var lastUpdateWasTracked: Boolean = false
+        private set
+
     /**
      * Feed a new detection result. Pass null when no document was detected.
      * Returns smoothed corners or null if detection has been lost.
      *
      * @param corners detected corner positions, or null if no detection this frame.
      * @param confidence detection confidence for this frame (ignored on miss).
+     * @param isTracked true if corners came from KLT tracking rather than full detection.
      */
-    fun update(corners: List<Point>?, confidence: Double = 0.0): List<Point>? {
+    fun update(
+        corners: List<Point>?,
+        confidence: Double = 0.0,
+        isTracked: Boolean = false
+    ): List<Point>? {
+        lastUpdateWasTracked = isTracked
         if (corners == null) {
             consecutiveMisses++
             resetStability()
@@ -115,6 +125,7 @@ class QuadSmoother(
         confidenceBuffer.clear()
         consecutiveMisses = 0
         previousSmoothed = null
+        lastUpdateWasTracked = false
         resetStability()
     }
 

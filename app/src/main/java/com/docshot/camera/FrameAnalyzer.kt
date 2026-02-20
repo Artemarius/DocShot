@@ -38,6 +38,7 @@ class FrameAnalyzer(
 ) : ImageAnalysis.Analyzer {
 
     private val smoother = QuadSmoother()
+    private val cornerTracker = CornerTracker()
 
     /** Number of consecutive frames with no valid detection (confidence < threshold). */
     private var consecutiveMisses = 0
@@ -48,12 +49,18 @@ class FrameAnalyzer(
     /** Last reported result, used when skipping frames. */
     private var lastResult: FrameDetectionResult? = null
 
-    /** Clears the smoother and miss counter so stability builds from scratch. */
+    /** Clears the smoother, tracker, and miss counter so stability builds from scratch. */
     fun resetSmoothing() {
         smoother.clear()
+        cornerTracker.reset()
         consecutiveMisses = 0
         frameCounter = 0
         lastResult = null
+    }
+
+    /** Releases native resources held by the corner tracker. Call from ViewModel.onCleared(). */
+    fun releaseTracker() {
+        cornerTracker.release()
     }
 
     override fun analyze(imageProxy: ImageProxy) {
@@ -61,7 +68,8 @@ class FrameAnalyzer(
 
         // Adaptive frame skipping: reduce processing on complex scenes where
         // detection repeatedly fails, to save CPU for other work.
-        if (shouldSkipFrame()) {
+        // Never skip during TRACKING — KLT is fast enough (~0.5ms) to run every frame.
+        if (cornerTracker.state != TrackingState.TRACKING && shouldSkipFrame()) {
             imageProxy.close()
             // Report last known result so UI stays responsive
             lastResult?.let { onResult(it) }
@@ -78,28 +86,54 @@ class FrameAnalyzer(
             val downscaled = downscaleIfNeeded(grayMat)
             val scaleFactor = analysisWidth.toDouble() / downscaled.cols()
 
-            val status = detectDocumentWithStatus(downscaled)
-            val detection = status.result
+            // Hybrid detect+track: only run full detection when the tracker needs it.
+            // In TRACKING state, most frames use KLT only (~0.5ms vs ~20ms for detection).
+            val runDetection = cornerTracker.state == TrackingState.DETECT_ONLY
+                    || cornerTracker.needsCorrectionDetection()
+
+            val status = if (runDetection) detectDocumentWithStatus(downscaled) else null
+            val detection = status?.result
+
+            var detectionMs = detection?.detectionMs ?: 0.0
+
+            // Scale detected corners back to original analysis dimensions
+            val rawDetectedCorners = detection?.corners?.map { pt ->
+                Point(pt.x * scaleFactor, pt.y * scaleFactor)
+            }
+
+            // Pass the frame and detection result through the corner tracker.
+            // The tracker uses the downscaled grayscale frame for KLT (same resolution
+            // as detection). Corners must be in downscaled coordinates for the tracker,
+            // then we scale the output back to analysis resolution.
+            val trackingResult = cornerTracker.processFrame(
+                currentGray = downscaled,
+                detectedCorners = detection?.corners,
+                detectionConfidence = detection?.confidence ?: 0.0
+            )
+
             if (downscaled !== grayMat) downscaled.release()
             grayMat.release()
 
-            // Update consecutive miss counter for adaptive frame skipping
-            if (detection != null) {
+            // Scale tracker output corners to analysis resolution
+            val trackedCorners = trackingResult.corners?.map { pt ->
+                Point(pt.x * scaleFactor, pt.y * scaleFactor)
+            }
+            val trackedConfidence = detection?.confidence ?: 0.0
+
+            // Update consecutive miss counter for adaptive frame skipping.
+            // A tracked frame counts as a "hit" to prevent skip-tier escalation.
+            if (trackedCorners != null) {
                 consecutiveMisses = 0
                 frameCounter = 0
             } else {
                 consecutiveMisses++
             }
 
-            // Scale corners back to original analysis dimensions
-            val rawCorners = detection?.corners?.map { pt ->
-                Point(pt.x * scaleFactor, pt.y * scaleFactor)
-            }
-
-            // Temporal smoothing (pass confidence for rolling average tracking)
+            // Temporal smoothing (pass confidence and tracking flag for downstream use)
             val smoothed = smoother.update(
-                corners = rawCorners,
-                confidence = detection?.confidence ?: 0.0
+                corners = trackedCorners,
+                confidence = trackedConfidence,
+                isTracked = trackingResult.isTracked
             )
 
             // Rotate corners for display orientation and normalize to [0,1]
@@ -120,19 +154,21 @@ class FrameAnalyzer(
             }
 
             val totalMs = (System.nanoTime() - start) / 1_000_000.0
-            Log.d(TAG, "analyze: %.1f ms (detect=%.1f ms, rotation=%d°, misses=%d)".format(
-                totalMs, detection?.detectionMs ?: 0.0, rotation, consecutiveMisses))
+            Log.d(TAG, "analyze: %.1f ms (detect=%.1f ms, tracked=%s, state=%s, rotation=%d°, misses=%d)".format(
+                totalMs, detectionMs, trackingResult.isTracked, trackingResult.state,
+                rotation, consecutiveMisses))
 
             val result = FrameDetectionResult(
                 normalizedCorners = normalized,
                 sourceWidth = displayWidth,
                 sourceHeight = displayHeight,
-                detectionMs = detection?.detectionMs ?: 0.0,
+                detectionMs = detectionMs,
                 totalMs = totalMs,
                 isStable = smoother.isStable,
                 stabilityProgress = smoother.stabilityProgress,
                 confidence = smoother.averageConfidence,
-                isPartialDocument = status.isPartialDocument
+                isPartialDocument = status?.isPartialDocument ?: false,
+                isTracked = trackingResult.isTracked
             )
             lastResult = result
             onResult(result)
@@ -246,5 +282,7 @@ data class FrameDetectionResult(
     val isStable: Boolean = false,
     val stabilityProgress: Float = 0f,
     val confidence: Double = 0.0,
-    val isPartialDocument: Boolean = false
+    val isPartialDocument: Boolean = false,
+    /** True if corners came from KLT tracking rather than full detection. */
+    val isTracked: Boolean = false
 )
