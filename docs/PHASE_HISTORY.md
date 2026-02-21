@@ -24,6 +24,7 @@
 | v1.2.1 | AR Estimation Fixes & Robustness | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.2 | Manual Capture Path | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.3 | Zero-Shutter-Lag Capture | Complete | ~124 unit + 27 instrumented = ~151 |
+| v1.2.4 | Low-Contrast Detection | Complete | ~124 unit + 32 instrumented = ~156 |
 
 ---
 
@@ -346,6 +347,34 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - Version bump: 1.2.2 → 1.2.3 (versionCode 2000009)
 
 **Files changed:** `CameraScreen.kt`, `build.gradle.kts` (~10 lines)
+
+---
+
+## v1.2.4: Low-Contrast / White-on-White Detection
+
+**Goal:** Detect white documents on bright/light surfaces where auto-Canny thresholds saturate.
+
+**Problem:** Auto-Canny `(0.67*median, 1.33*median)` produces thresholds ~147/250 for bright scenes (median ~220), missing 5-35 unit boundary gradients. CLAHE (clipLimit=3.0/4x4) not aggressive enough when both surfaces uniformly bright. Saturation channel fails when both surfaces are white (S~0).
+
+### New Preprocessing Strategies
+- **ADAPTIVE_THRESHOLD:** blockSize=51, C=5 → morph gradient → binary edge image. Captures document boundary at correct spatial scale.
+- **LAB_CLAHE:** BGR→LAB L-channel + CLAHE(6.0, 2x2). Amplifies micro-contrast from surface warmth/coolness differences.
+- **GRADIENT_MAGNITUDE:** Sobel X/Y → magnitude → 95th percentile threshold. Isolates strongest relative gradients regardless of absolute intensity.
+- **DOG:** GaussianBlur(3x3) - GaussianBlur(21x21) → Canny(10/30). Suppresses texture + illumination, isolates edge-scale features.
+- **MULTICHANNEL_FUSION:** Per-channel Canny(20/50) + bitwise OR. Captures per-channel color differences invisible in grayscale.
+
+### Architecture
+- `PreprocessStrategy.isBinaryOutput`: ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE, MULTICHANNEL_FUSION bypass Canny — preprocessor output is the edge map
+- `SceneAnalysis.isWhiteOnWhite = meanVal > 180 && stddevVal < 35`: replaces strategy list with specialized pipeline, non-white-on-white unchanged
+- `detectWithStrategy()` made `internal` for benchmark testing
+
+### Test Infrastructure
+- 6 synthetic generators: whiteOnNearWhite (~30 gradient), whiteOnWhite (~20), whiteOnCream (~25 warm), whiteOnLightWood (~35 warm), whiteOnWhiteTextured (~15+noise), glossyPaper (variable gradient)
+- 2 false positive generators: brightnessGradientNoDocs, noisyWhiteNoDocs
+- `LowContrastBenchmarkTest`: per-strategy benchmark harness
+- 5 new regression tests (3 detection + 2 false positive guards)
+
+**Files changed:** `Preprocessor.kt`, `DocumentDetector.kt`, `SyntheticImageFactory.kt`, `DetectionRegressionTest.kt`, new `LowContrastBenchmarkTest.kt`, `build.gradle.kts`
 
 ---
 

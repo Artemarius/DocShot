@@ -42,7 +42,7 @@ Android document rectification app. Camera input -> automatic document boundary 
 - Corner ordering: consistent TL, TR, BR, BL based on sum/difference of coordinates
 - Output dimensions: derive from longest edge pairs to preserve document aspect ratio
 - Always use `Imgproc.INTER_CUBIC` for the final warp, `INTER_LINEAR` for preview
-- 5 preprocessing strategies (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) with scene analysis and 25ms time budget
+- 10 preprocessing strategies: 5 original (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) + 5 low-contrast (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene analysis, white-on-white detection, and 25ms time budget
 
 ## File Structure
 ```
@@ -53,12 +53,12 @@ app/src/main/java/com/docshot/
 └── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
-## Current State (v1.2.3)
+## Current State (v1.2.4)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
-- **v1.2.3 complete.** Zero-Shutter-Lag capture: switched from `CAPTURE_MODE_MAXIMIZE_QUALITY` to `CAPTURE_MODE_ZERO_SHUTTER_LAG`. Eliminates 50-300ms capture latency mismatch where captured frame could differ from preview overlay on slower devices. Auto-fallback to `MINIMIZE_LATENCY` when flash is ON or device lacks PRIVATE_REPROCESSING.
+- **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
-- **Next (v1.2.4):** Multi-frame AR revival — homography variation gating, FOV-based intrinsics fallback. See [PROJECT.md](PROJECT.md).
+- **Next:** Multi-frame AR revival — homography variation gating, FOV-based intrinsics fallback. See [PROJECT.md](PROJECT.md).
 
 ## Key Architecture Details (for current work)
 
@@ -79,6 +79,21 @@ app/src/main/java/com/docshot/
 - ResultScreen initial ratio: locked ratio (priority) > single-frame estimate (estConf >= 0.5, if auto-estimate enabled) > A4 fallback (0.707). Format label shows "(auto)" suffix when auto-estimated, debug info shows raw and slider ratios. Slider 0.25-1.0 with 300ms debounce re-warp, two-row layout (lock+label / full-width slider), aspect ratio lock persisted in DataStore
 - Gallery imports use single-frame dual-regime estimation
 - Settings toggle: "Aspect ratio default" — Auto (estimated) vs Always A4, persisted in DataStore
+
+### Low-Contrast / White-on-White Detection (v1.2.4)
+- Root cause: auto-Canny thresholds `(0.67*median, 1.33*median)` saturate for bright scenes (median ~220 → thresholds 147/293, clamped 147/250), missing 5-35 unit boundary gradients
+- Scene analysis: `isWhiteOnWhite = meanVal > 180 && stddevVal < 35` triggers specialized strategy pipeline
+- Strategy order (benchmark-driven, DOG first — see [docs/LOW_CONTRAST_BENCHMARK.md](docs/LOW_CONTRAST_BENCHMARK.md)):
+  1. `DOG`: GaussianBlur(3x3) - GaussianBlur(21x21). Bandpass filter isolates edge-scale features, suppresses texture + illumination. 6/6 detected, 2.9-3.8ms, 0.0px error. Grayscale output → Canny 10/30.
+  2. `GRADIENT_MAGNITUDE`: Sobel X/Y → magnitude → 95th percentile threshold (histogram-based). Document boundary = strongest relative gradient. 5/6 detected. Binary output bypasses Canny.
+  3. `LAB_CLAHE`: BGR→LAB, L-channel + CLAHE(clipLimit=6.0, tileSize=2x2). Amplifies micro-contrast from warmth/coolness differences. 5/6 detected. Grayscale output → Canny 30/60.
+  4. `CLAHE_ENHANCED`: existing strategy, reliable fallback. 6/6 detected.
+  5. `MULTICHANNEL_FUSION`: Per-channel Canny(20/50) + bitwise OR. Captures color differences invisible in grayscale. 5/6 detected. Binary output bypasses Canny.
+  6. `ADAPTIVE_THRESHOLD`: blockSize=51, C=5 → binary segmentation → morph gradient → edge image. 3/6 detected, last resort.
+- `PreprocessStrategy.isBinaryOutput`: ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE, MULTICHANNEL_FUSION bypass Canny in `detectWithStrategy()` — preprocessed output is the edge map
+- Non-white-on-white scenes keep existing 5-strategy pipeline — zero performance regression
+- Pipeline efficiency: DOG short-circuits on first attempt (~3ms) vs old pipeline STANDARD(fail, ~8ms) → CLAHE(~5ms) = ~13ms. ~4x faster for white-on-white.
+- Test infrastructure: 6 synthetic generators (whiteOnNearWhite..glossyPaper), `LowContrastBenchmarkTest` per-strategy harness, false positive guards (gradient-only, noisy-only)
 
 ### Confidence Thresholds
 - No corners (empty list): routes to manual corner placement with 10%-inset defaults

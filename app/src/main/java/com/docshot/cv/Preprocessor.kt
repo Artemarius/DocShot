@@ -2,12 +2,21 @@ package com.docshot.cv
 
 import android.util.Log
 import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfDouble
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 
 private const val TAG = "DocShot:Preprocess"
+
+// Cached structuring kernels for morphological ops in preprocessing strategies.
+private val preprocessMorphKernel3x3: Mat by lazy {
+    Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(3.0, 3.0))
+}
+private val preprocessMorphKernel5x5: Mat by lazy {
+    Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+}
 
 /**
  * Preprocessing strategies for document edge detection.
@@ -27,7 +36,26 @@ enum class PreprocessStrategy {
     BILATERAL,
 
     /** Standard preprocess + heavier morphological close in EdgeDetector. For patterned surfaces. */
-    HEAVY_MORPH
+    HEAVY_MORPH,
+
+    /** Adaptive threshold binarization (blockSize=51, C=5). Binary output — bypasses Canny. */
+    ADAPTIVE_THRESHOLD,
+
+    /** LAB L-channel + aggressive CLAHE (clipLimit=6.0, tileSize=2x2). For warm/cool surface differences. */
+    LAB_CLAHE,
+
+    /** Sobel gradient magnitude thresholded at 95th percentile. Binary output — bypasses Canny. */
+    GRADIENT_MAGNITUDE,
+
+    /** Difference of Gaussians (3x3 - 21x21). Feeds Canny at very low thresholds (10/30). */
+    DOG,
+
+    /** Per-channel Canny (20/50) + bitwise OR. Binary output — bypasses Canny. Expensive (~8-12ms). */
+    MULTICHANNEL_FUSION;
+
+    /** True if this strategy produces a binary (0/255) edge map that bypasses Canny in the detector. */
+    val isBinaryOutput: Boolean
+        get() = this == ADAPTIVE_THRESHOLD || this == GRADIENT_MAGNITUDE || this == MULTICHANNEL_FUSION
 }
 
 /**
@@ -38,7 +66,9 @@ data class SceneAnalysis(
     val stddevIntensity: Double,
     val strategies: List<PreprocessStrategy>,
     /** Grayscale Mat produced during analysis. Caller must release when done, or pass to preprocessing. */
-    val grayMat: Mat? = null
+    val grayMat: Mat? = null,
+    /** True when both surfaces are uniformly bright (mean > 180, stddev < 35). */
+    val isWhiteOnWhite: Boolean = false
 )
 
 /** Maximum number of frames to cache a SceneAnalysis result. */
@@ -81,6 +111,11 @@ fun preprocessWithStrategy(
         PreprocessStrategy.SATURATION_CHANNEL -> preprocessSaturation(input, pool)
         PreprocessStrategy.BILATERAL -> preprocessBilateral(input, pool, sharedGray)
         PreprocessStrategy.HEAVY_MORPH -> preprocessStandard(input, pool, sharedGray) // edge detector applies heavier morph
+        PreprocessStrategy.ADAPTIVE_THRESHOLD -> preprocessAdaptiveThreshold(input, pool, sharedGray)
+        PreprocessStrategy.LAB_CLAHE -> preprocessLabClahe(input, pool, sharedGray)
+        PreprocessStrategy.GRADIENT_MAGNITUDE -> preprocessGradientMagnitude(input, pool, sharedGray)
+        PreprocessStrategy.DOG -> preprocessDoG(input, pool, sharedGray)
+        PreprocessStrategy.MULTICHANNEL_FUSION -> preprocessMultichannelFusion(input)
     }
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
@@ -141,45 +176,70 @@ fun analyzeScene(input: Mat, useCache: Boolean = true): SceneAnalysis {
     mean.release()
     stddev.release()
 
-    val strategies = mutableListOf<PreprocessStrategy>()
-
-    // Low light or low contrast → CLAHE is most likely to help, try it first
     val isLowLight = meanVal < 80.0
     val isLowContrast = stddevVal < 30.0
-    if (isLowLight || isLowContrast) {
-        strategies.add(PreprocessStrategy.CLAHE_ENHANCED)
+    // White-on-white: both surfaces uniformly bright, subtle boundary gradients.
+    // Auto-Canny thresholds saturate (0.67*220 ≈ 147), missing 5-15 unit edges.
+    val isWhiteOnWhite = meanVal > 180.0 && stddevVal < 35.0
+
+    val strategies = mutableListOf<PreprocessStrategy>()
+
+    if (isWhiteOnWhite) {
+        // Specialized low-contrast strategies for white-on-white scenes,
+        // ordered by benchmark results (S21). Short-circuit at 0.65 confidence
+        // means typically only the first strategy runs (~3ms).
+        //
+        // Benchmark (6 synthetic images, 800x600):
+        //   DOG:             6/6 detected, 2.9-3.8ms, 0.0px median error
+        //   GRADIENT_MAG:    5/6 detected, 4.6-10.8ms (missed textured)
+        //   LAB_CLAHE:       5/6 detected, 3.7-6.3ms  (missed textured)
+        //   CLAHE_ENHANCED:  6/6 detected, 2.8-7.0ms  (existing fallback)
+        //   MULTI_FUSION:    5/6 detected, 2.6-4.5ms  (missed textured)
+        //   ADAPTIVE_THRESH: 3/6 detected, 7.6-10.8ms (missed <=20 gradient)
+        strategies.add(PreprocessStrategy.DOG)
+        strategies.add(PreprocessStrategy.GRADIENT_MAGNITUDE)
+        strategies.add(PreprocessStrategy.LAB_CLAHE)
+        strategies.add(PreprocessStrategy.CLAHE_ENHANCED) // existing, reliable fallback
+        strategies.add(PreprocessStrategy.MULTICHANNEL_FUSION)
+        strategies.add(PreprocessStrategy.ADAPTIVE_THRESHOLD) // weakest, last resort
+    } else {
+        // Low light or low contrast → CLAHE is most likely to help, try it first
+        if (isLowLight || isLowContrast) {
+            strategies.add(PreprocessStrategy.CLAHE_ENHANCED)
+        }
+
+        // Always try standard
+        strategies.add(PreprocessStrategy.STANDARD)
+
+        // CLAHE as fallback when not already prioritized: scenes with moderate
+        // contrast (stddev 30-60) may have document/background differences that
+        // are too subtle for auto-Canny after Gaussian blur. CLAHE + lower
+        // thresholds catches these cases. Short-circuit prevents wasted work
+        // when STANDARD already succeeds.
+        if (!isLowLight && !isLowContrast) {
+            strategies.add(PreprocessStrategy.CLAHE_ENHANCED)
+        }
+
+        // Color input → saturation channel may isolate white document from colored bg
+        if (input.channels() >= 3) {
+            strategies.add(PreprocessStrategy.SATURATION_CHANNEL)
+        }
+
+        // Bilateral and heavy morph as fallbacks for textured surfaces
+        strategies.add(PreprocessStrategy.BILATERAL)
+        strategies.add(PreprocessStrategy.HEAVY_MORPH)
     }
-
-    // Always try standard
-    strategies.add(PreprocessStrategy.STANDARD)
-
-    // CLAHE as fallback when not already prioritized: scenes with moderate
-    // contrast (stddev 30-60) may have document/background differences that
-    // are too subtle for auto-Canny after Gaussian blur. CLAHE + lower
-    // thresholds catches these cases. Short-circuit prevents wasted work
-    // when STANDARD already succeeds.
-    if (!isLowLight && !isLowContrast) {
-        strategies.add(PreprocessStrategy.CLAHE_ENHANCED)
-    }
-
-    // Color input → saturation channel may isolate white document from colored bg
-    if (input.channels() >= 3) {
-        strategies.add(PreprocessStrategy.SATURATION_CHANNEL)
-    }
-
-    // Bilateral and heavy morph as fallbacks for textured surfaces
-    strategies.add(PreprocessStrategy.BILATERAL)
-    strategies.add(PreprocessStrategy.HEAVY_MORPH)
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
-    Log.d(TAG, "analyzeScene: %.1f ms (mean=%.0f, stddev=%.0f) -> %s".format(
-        ms, meanVal, stddevVal, strategies))
+    Log.d(TAG, "analyzeScene: %.1f ms (mean=%.0f, stddev=%.0f, whiteOnWhite=%s) -> %s".format(
+        ms, meanVal, stddevVal, isWhiteOnWhite, strategies))
 
     val result = SceneAnalysis(
         meanIntensity = meanVal,
         stddevIntensity = stddevVal,
         strategies = strategies,
-        grayMat = grayOwned  // null if input was already gray
+        grayMat = grayOwned,  // null if input was already gray
+        isWhiteOnWhite = isWhiteOnWhite
     )
 
     // Update cache (without grayMat — each frame gets its own)
@@ -307,4 +367,242 @@ private fun preprocessBilateral(input: Mat, pool: MatPool? = null, sharedGray: M
     Imgproc.bilateralFilter(gray, filtered, 9, 75.0, 75.0)
     gray.release()
     return filtered
+}
+
+// ----------------------------------------------------------------
+// WP-1..5: Low-contrast / white-on-white strategy implementations
+// ----------------------------------------------------------------
+
+/**
+ * Adaptive threshold binarization for white-on-white scenes.
+ * Large block size (51) captures document boundary scale, not text lines.
+ * Returns a binary edge image (0/255) — bypasses Canny in the detector.
+ *
+ * Pipeline: grayscale → blur → adaptive threshold → morph gradient (boundary extraction) → morph close.
+ */
+private fun preprocessAdaptiveThreshold(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
+
+    // Light blur to reduce noise before thresholding
+    val blurred = Mat()
+    Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
+    gray.release()
+
+    val binary = Mat()
+    // blockSize=51: large enough to capture document boundary, not text lines.
+    // C=5: pixels must be noticeably darker than their local neighborhood
+    // to be classified as background (0). The document (brighter) stays white (255).
+    Imgproc.adaptiveThreshold(
+        blurred, binary, 255.0,
+        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+        Imgproc.THRESH_BINARY,
+        51, 5.0
+    )
+    blurred.release()
+
+    // Morphological gradient (dilate - erode) extracts the boundary of the
+    // binary segmentation, producing thin edge lines suitable for findContours.
+    val edges = Mat()
+    Imgproc.morphologyEx(binary, edges, Imgproc.MORPH_GRADIENT, preprocessMorphKernel3x3)
+    binary.release()
+
+    // Close to bridge small gaps at document boundary
+    Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
+
+    return edges
+}
+
+/**
+ * LAB L-channel with aggressive CLAHE for white-on-white scenes.
+ * LAB separates luminance from chrominance — surfaces that differ in warmth/coolness
+ * (e.g., cream tablecloth vs white paper) show micro-contrast on the L channel that
+ * is invisible in grayscale. Aggressive CLAHE (clipLimit=6.0, tileSize=2x2) amplifies
+ * these subtle differences.
+ *
+ * Returns a grayscale image — feeds through Canny at 30/60 thresholds.
+ */
+private fun preprocessLabClahe(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    if (input.channels() < 3) {
+        // Grayscale input: apply aggressive CLAHE directly (no LAB conversion)
+        val gray = toGray(input, pool, sharedGray)
+        val clahe = Imgproc.createCLAHE(6.0, Size(2.0, 2.0))
+        val enhanced = Mat()
+        clahe.apply(gray, enhanced)
+        gray.release()
+        val blurred = Mat()
+        Imgproc.GaussianBlur(enhanced, blurred, Size(5.0, 5.0), 0.0)
+        enhanced.release()
+        return blurred
+    }
+
+    val bgr = if (input.channels() == 4) {
+        val b = Mat()
+        Imgproc.cvtColor(input, b, Imgproc.COLOR_RGBA2BGR)
+        b
+    } else {
+        input
+    }
+
+    val lab = Mat()
+    Imgproc.cvtColor(bgr, lab, Imgproc.COLOR_BGR2Lab)
+    if (bgr !== input) bgr.release()
+
+    val channels = mutableListOf<Mat>()
+    Core.split(lab, channels)
+    lab.release()
+
+    val lChannel = channels[0]
+    for (i in 1 until channels.size) channels[i].release()
+
+    // Aggressive CLAHE: higher clip limit and smaller tiles amplify micro-contrast
+    // between surfaces that differ in warmth/coolness
+    val clahe = Imgproc.createCLAHE(6.0, Size(2.0, 2.0))
+    val enhanced = Mat()
+    clahe.apply(lChannel, enhanced)
+    lChannel.release()
+
+    val blurred = Mat()
+    Imgproc.GaussianBlur(enhanced, blurred, Size(5.0, 5.0), 0.0)
+    enhanced.release()
+
+    return blurred
+}
+
+/**
+ * Sobel gradient magnitude thresholded at the 95th percentile.
+ * The document boundary is the strongest gradient in a white-on-white scene
+ * regardless of absolute intensity — relative strength is what matters.
+ * Returns a binary edge image (0/255) — bypasses Canny in the detector.
+ *
+ * Pipeline: grayscale → Sobel X/Y → magnitude → normalize → 95th percentile threshold → morph close.
+ */
+private fun preprocessGradientMagnitude(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
+
+    val gradX = Mat()
+    val gradY = Mat()
+    Imgproc.Sobel(gray, gradX, CvType.CV_32F, 1, 0)
+    Imgproc.Sobel(gray, gradY, CvType.CV_32F, 0, 1)
+    gray.release()
+
+    val magnitude = Mat()
+    Core.magnitude(gradX, gradY, magnitude)
+    gradX.release()
+    gradY.release()
+
+    // Normalize to 0-255 for percentile computation
+    val magnitudeU8 = Mat()
+    Core.normalize(magnitude, magnitudeU8, 0.0, 255.0, Core.NORM_MINMAX)
+    magnitude.release()
+    magnitudeU8.convertTo(magnitudeU8, CvType.CV_8UC1)
+
+    // Find 95th percentile threshold via histogram on raw byte data
+    val data = ByteArray(magnitudeU8.total().toInt() * magnitudeU8.channels())
+    magnitudeU8.get(0, 0, data)
+
+    val histogram = IntArray(256)
+    for (b in data) {
+        histogram[b.toInt() and 0xFF]++
+    }
+
+    val totalPixels = data.size
+    val target = (totalPixels * 0.95).toInt()
+    var cumSum = 0
+    var thresholdVal = 255
+    for (i in 0 until 256) {
+        cumSum += histogram[i]
+        if (cumSum >= target) {
+            thresholdVal = i
+            break
+        }
+    }
+
+    val binary = Mat()
+    Imgproc.threshold(magnitudeU8, binary, thresholdVal.toDouble(), 255.0, Imgproc.THRESH_BINARY)
+    magnitudeU8.release()
+
+    // Morph close (5x5) to connect nearby gradient pixels into continuous edges
+    Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_CLOSE, preprocessMorphKernel5x5)
+
+    return binary
+}
+
+/**
+ * Difference of Gaussians: GaussianBlur(3x3) - GaussianBlur(21x21).
+ * Isolates edge-scale features while suppressing both fine texture (text, grain)
+ * and broad illumination gradients. For white-on-white scenes, the document
+ * boundary is the only feature at the right spatial scale.
+ *
+ * Returns a grayscale image — feeds through Canny at very low thresholds (10/30).
+ */
+private fun preprocessDoG(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
+
+    val blurSmall = Mat()
+    val blurLarge = Mat()
+    Imgproc.GaussianBlur(gray, blurSmall, Size(3.0, 3.0), 0.0)
+    Imgproc.GaussianBlur(gray, blurLarge, Size(21.0, 21.0), 0.0)
+    gray.release()
+
+    // DoG = small blur - large blur: isolates edge-scale features
+    val dog = Mat()
+    Core.subtract(blurSmall, blurLarge, dog)
+    blurSmall.release()
+    blurLarge.release()
+
+    // Subtraction can produce negative values — take absolute value for edge strength
+    Core.convertScaleAbs(dog, dog)
+
+    return dog
+}
+
+/**
+ * Multi-channel edge fusion: runs Canny(20/50) on each BGR channel independently,
+ * then combines with bitwise OR. Captures per-channel gradients invisible in
+ * grayscale (e.g., blue channel difference between white paper and cream surface).
+ *
+ * Returns a binary edge image (0/255) — bypasses Canny in the detector.
+ * Most expensive strategy (~8-12ms), used as last resort.
+ */
+private fun preprocessMultichannelFusion(input: Mat): Mat {
+    if (input.channels() < 3) {
+        // Grayscale: fall back to single-channel Canny with low thresholds
+        val edges = Mat()
+        Imgproc.Canny(input, edges, 20.0, 50.0)
+        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
+        return edges
+    }
+
+    val bgr = if (input.channels() == 4) {
+        val b = Mat()
+        Imgproc.cvtColor(input, b, Imgproc.COLOR_RGBA2BGR)
+        b
+    } else {
+        input
+    }
+
+    // Split into B, G, R channels
+    val channels = mutableListOf<Mat>()
+    Core.split(bgr, channels)
+    if (bgr !== input) bgr.release()
+
+    // Run Canny on each channel with low thresholds, OR results.
+    // Per-channel gradients capture color differences invisible in grayscale.
+    var combined: Mat? = null
+    for (ch in channels) {
+        val edges = Mat()
+        Imgproc.Canny(ch, edges, 20.0, 50.0)
+        ch.release()
+        if (combined == null) {
+            combined = edges
+        } else {
+            Core.bitwise_or(combined, edges, combined)
+            edges.release()
+        }
+    }
+
+    // Morph close to bridge gaps across channels
+    Imgproc.morphologyEx(combined!!, combined, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
+
+    return combined
 }

@@ -338,6 +338,172 @@ object SyntheticImageFactory {
     }
 
     // ----------------------------------------------------------------
+    // Low-contrast / white-on-white generators (WP-0)
+    // ----------------------------------------------------------------
+
+    /**
+     * White document on near-white background (~30 unit gradient).
+     * Tests the easiest white-on-white scenario.
+     */
+    fun whiteOnNearWhite(
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val bgColor = Scalar(210.0, 210.0, 210.0)
+        val docColor = Scalar(240.0, 240.0, 240.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return image
+    }
+
+    /**
+     * White document on white background (~20 unit gradient).
+     * Hardest uniform case — nearly invisible boundary.
+     */
+    fun whiteOnWhite(
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val bgColor = Scalar(225.0, 225.0, 225.0)
+        val docColor = Scalar(245.0, 245.0, 245.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return image
+    }
+
+    /**
+     * White document on cream/warm background (~25 unit gradient with warm tone).
+     * Cream tablecloth scenario — background has warm tint (more R than B in BGR).
+     */
+    fun whiteOnCream(
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        // BGR: B=200, G=210, R=220 → warm (cream) background
+        val bgColor = Scalar(200.0, 210.0, 220.0)
+        val docColor = Scalar(240.0, 240.0, 240.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return image
+    }
+
+    /**
+     * White document on light wood background (~35 unit gradient with warm tone).
+     * Light wood desk — larger gradient than cream, with noticeable warm tint.
+     */
+    fun whiteOnLightWood(
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        // BGR: B=180, G=200, R=215 → warm wood tone
+        val bgColor = Scalar(180.0, 200.0, 215.0)
+        val docColor = Scalar(240.0, 240.0, 240.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return image
+    }
+
+    /**
+     * White document on textured white background (~15 unit gradient + noise).
+     * Background has Gaussian noise (stddev=5) simulating fabric texture.
+     * Document drawn on top is clean (solid color).
+     */
+    fun whiteOnWhiteTextured(
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val bgColor = Scalar(225.0, 225.0, 225.0)
+        val docColor = Scalar(240.0, 240.0, 240.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+
+        // Add texture noise to background before drawing document
+        val noise = Mat(height, width, CvType.CV_16SC3)
+        Core.randn(noise, 0.0, 5.0)
+        val image16 = Mat()
+        image.convertTo(image16, CvType.CV_16SC3)
+        Core.add(image16, noise, image16)
+        image16.convertTo(image, CvType.CV_8UC3)
+        image16.release()
+        noise.release()
+
+        // Document drawn on top overwrites noise in its region
+        fillQuad(image, corners, docColor)
+        return image
+    }
+
+    /**
+     * White document on a glossy/gradient background (200→240 horizontal gradient).
+     * Simulates reflective surfaces where the gradient varies across the background.
+     * Document boundary contrast varies from ~40 (left) to ~0 (right).
+     */
+    fun glossyPaper(
+        corners: List<Point> = defaultA4Corners(),
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        // Create horizontal brightness gradient (200 at left, 240 at right)
+        val gray = Mat(height, width, CvType.CV_8UC1)
+        val rowData = ByteArray(width)
+        for (col in 0 until width) {
+            rowData[col] = (200 + 40 * col / width).toByte()
+        }
+        for (row in 0 until height) {
+            gray.put(row, 0, rowData)
+        }
+        val image = Mat()
+        Imgproc.cvtColor(gray, image, Imgproc.COLOR_GRAY2BGR)
+        gray.release()
+
+        fillQuad(image, corners, Scalar(240.0, 240.0, 240.0))
+        return image
+    }
+
+    // ----------------------------------------------------------------
+    // False positive guard generators (no document present)
+    // ----------------------------------------------------------------
+
+    /**
+     * Horizontal brightness gradient (180→240) with no document.
+     * Must not trigger a false positive detection.
+     */
+    fun brightnessGradientNoDocs(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val gray = Mat(height, width, CvType.CV_8UC1)
+        val rowData = ByteArray(width)
+        for (col in 0 until width) {
+            rowData[col] = (180 + 60 * col / width).toByte()
+        }
+        for (row in 0 until height) {
+            gray.put(row, 0, rowData)
+        }
+        val image = Mat()
+        Imgproc.cvtColor(gray, image, Imgproc.COLOR_GRAY2BGR)
+        gray.release()
+        return image
+    }
+
+    /**
+     * Uniform white background with Gaussian noise (stddev=15), no document.
+     * Must not trigger a false positive detection.
+     */
+    fun noisyWhiteNoDocs(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val image = Mat(height, width, CvType.CV_8UC3, Scalar(220.0, 220.0, 220.0))
+        val noisy = addNoise(image, stddev = 15.0)
+        image.release()
+        return noisy
+    }
+
+    // ----------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------
 

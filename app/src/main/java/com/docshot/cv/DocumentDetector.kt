@@ -153,8 +153,10 @@ fun detectDocumentWithStatus(input: Mat): DetectionStatus {
  *
  * Wrapped in try/finally to guarantee intermediate Mat cleanup even if
  * scoring or contour analysis throws.
+ *
+ * Internal visibility for benchmark testing via [LowContrastBenchmarkTest].
  */
-private fun detectWithStrategy(
+internal fun detectWithStrategy(
     input: Mat,
     strategy: PreprocessStrategy,
     sharedGray: Mat? = null
@@ -168,18 +170,32 @@ private fun detectWithStrategy(
 
     try {
         preprocessed = preprocessWithStrategy(input, strategy, sharedGray = sharedGray)
-        edges = when (strategy) {
-            PreprocessStrategy.HEAVY_MORPH -> detectEdgesHeavyMorph(preprocessed)
-            PreprocessStrategy.CLAHE_ENHANCED -> {
-                // CLAHE-enhanced images need lower Canny thresholds: the auto-threshold
-                // formula (0.67*median) overestimates for low-contrast scenes where edge
-                // gradients are subtle even after histogram equalization.
-                detectEdges(preprocessed, thresholdLow = 30.0, thresholdHigh = 60.0)
+
+        if (strategy.isBinaryOutput) {
+            // Binary-output strategies (ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE,
+            // MULTICHANNEL_FUSION) already produce edge maps — skip Canny.
+            // Transfer ownership: preprocessed becomes edges.
+            edges = preprocessed
+            preprocessed = null
+        } else {
+            edges = when (strategy) {
+                PreprocessStrategy.HEAVY_MORPH -> detectEdgesHeavyMorph(preprocessed)
+                PreprocessStrategy.CLAHE_ENHANCED, PreprocessStrategy.LAB_CLAHE -> {
+                    // CLAHE-enhanced images need lower Canny thresholds: the auto-threshold
+                    // formula (0.67*median) overestimates for low-contrast scenes where edge
+                    // gradients are subtle even after histogram equalization.
+                    detectEdges(preprocessed, thresholdLow = 30.0, thresholdHigh = 60.0)
+                }
+                PreprocessStrategy.DOG -> {
+                    // DoG suppresses both texture and illumination gradients — use very low
+                    // Canny thresholds to capture the subtle remaining edges.
+                    detectEdges(preprocessed, thresholdLow = 10.0, thresholdHigh = 30.0)
+                }
+                else -> detectEdges(preprocessed)
             }
-            else -> detectEdges(preprocessed)
+            preprocessed.release()
+            preprocessed = null
         }
-        preprocessed.release()
-        preprocessed = null
 
         val contourAnalysis = analyzeContours(edges, imageSize)
         val quads = contourAnalysis.quads

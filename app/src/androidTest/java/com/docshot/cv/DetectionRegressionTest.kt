@@ -332,6 +332,77 @@ class DetectionRegressionTest {
     }
 
     // ----------------------------------------------------------------
+    // Group E: Low-contrast / white-on-white detection
+    // ----------------------------------------------------------------
+
+    @Test
+    fun whiteOnNearWhite_detects() {
+        val image = SyntheticImageFactory.whiteOnNearWhite()
+        try {
+            invalidateSceneCache()
+            val result = detectDocument(image)
+            assertNotNull("Should detect white doc on near-white background (~30 gradient)", result)
+            Log.d(TAG, "White on near-white confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun whiteOnCream_detects() {
+        val image = SyntheticImageFactory.whiteOnCream()
+        try {
+            invalidateSceneCache()
+            val result = detectDocument(image)
+            assertNotNull("Should detect white doc on cream background (~25 warm gradient)", result)
+            Log.d(TAG, "White on cream confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun whiteOnLightWood_detects() {
+        val image = SyntheticImageFactory.whiteOnLightWood()
+        try {
+            invalidateSceneCache()
+            val result = detectDocument(image)
+            assertNotNull("Should detect white doc on light wood background (~35 gradient)", result)
+            Log.d(TAG, "White on light wood confidence: ${result!!.confidence}")
+        } finally {
+            image.release()
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Group F: False positive guards (no document present)
+    // ----------------------------------------------------------------
+
+    @Test
+    fun brightnessGradient_noFalsePositive() {
+        val image = SyntheticImageFactory.brightnessGradientNoDocs()
+        try {
+            invalidateSceneCache()
+            val result = detectDocument(image)
+            assertNull("Brightness gradient with no document should not trigger false positive", result)
+        } finally {
+            image.release()
+        }
+    }
+
+    @Test
+    fun noisyWhiteBackground_noFalsePositive() {
+        val image = SyntheticImageFactory.noisyWhiteNoDocs()
+        try {
+            invalidateSceneCache()
+            val result = detectDocument(image)
+            assertNull("Noisy white background with no document should not trigger false positive", result)
+        } finally {
+            image.release()
+        }
+    }
+
+    // ----------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------
 
