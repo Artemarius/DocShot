@@ -53,12 +53,12 @@ app/src/main/java/com/docshot/
 └── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
-## Current State (v1.2.2)
+## Current State (v1.2.3)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
-- **Phase 12 (Play Store release) in progress.** App icon, splash screen, signing, privacy policy, store listing done. Remaining: Play Console forms, screenshots, submit for review.
-- **v1.2.2 complete.** Manual capture path: shutter always works, even when no document detected. No-detection captures route to CornerAdjustScreen with 10%-inset default corners for manual placement. Hint text updated ("Tap to capture manually"). See [PROJECT.md](PROJECT.md) for roadmap.
+- **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
+- **v1.2.3 complete.** Zero-Shutter-Lag capture: switched from `CAPTURE_MODE_MAXIMIZE_QUALITY` to `CAPTURE_MODE_ZERO_SHUTTER_LAG`. Eliminates 50-300ms capture latency mismatch where captured frame could differ from preview overlay on slower devices. Auto-fallback to `MINIMIZE_LATENCY` when flash is ON or device lacks PRIVATE_REPROCESSING.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
-- **Next (v1.2.3):** Multi-frame AR revival — homography variation gating, FOV-based intrinsics fallback. See [PROJECT.md](PROJECT.md).
+- **Next (v1.2.4):** Multi-frame AR revival — homography variation gating, FOV-based intrinsics fallback. See [PROJECT.md](PROJECT.md).
 
 ## Key Architecture Details (for current work)
 
@@ -66,7 +66,7 @@ app/src/main/java/com/docshot/
 - `QuadSmoother`: buffers last 5 detections, 20-frame stability threshold, three-tier drift response (<2.5% increment, 2.5-10% halve, >10% hard reset), pre-smoothing jump detection at 10%
 - `FrameAnalyzer`: hybrid detect+track via `CornerTracker` (KLT on most frames, full detection every 3rd frame during tracking), adaptive frame skipping disabled during tracking, KLT-only frames carry forward last detection confidence (v1.2.0 fix: previously injected 0.0 → broke auto-capture)
 - AF lock triggers at 50% stability (10/20 frames), auto-capture fires at 100% + confidence >= 0.65 + 1.5s warmup
-- `CaptureProcessor`: re-detects on full-res capture frame, validates against preview corners (5% drift tolerance)
+- `CaptureProcessor`: re-detects on full-res capture frame, validates against preview corners (5% drift tolerance). ZSL mode (`CAPTURE_MODE_ZERO_SHUTTER_LAG`) ensures captured frame matches preview (ring buffer selects past frame closest to trigger timestamp). Falls back to `MINIMIZE_LATENCY` with flash or on unsupported devices.
 
 ### Aspect Ratio (single-frame dual-regime)
 - `AspectRatioEstimator`: dual-regime estimation — angular correction (<5deg severity) + projective decomposition (>10deg) + transition blending (5-10deg). Format snapping (A4, US Letter, ID Card, Square) with SNAP_THRESHOLD=0.035, SNAP_SIGMA=0.025 + homography error disambiguation when intrinsics available

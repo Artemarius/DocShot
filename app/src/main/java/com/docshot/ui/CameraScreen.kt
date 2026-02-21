@@ -491,7 +491,7 @@ private fun bindCamera(
             .also { it.setAnalyzer(analysisExecutor, viewModel.frameAnalyzer) }
 
         val imageCapture = ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG)
             .build()
 
         viewModel.imageCapture = imageCapture
@@ -506,6 +506,7 @@ private fun bindCamera(
                 imageCapture
             )
             viewModel.camera = camera
+            Log.d(TAG, "ZSL supported: ${camera.cameraInfo.isZslSupported}")
             camera.cameraControl.enableTorch(viewModel.flashEnabled.value)
             extractCameraIntrinsics(camera, viewModel)
         } catch (e: Exception) {

@@ -23,6 +23,7 @@
 | v1.2.0 | KLT Tracking + Aspect Ratio Recovery | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.1 | AR Estimation Fixes & Robustness | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.2 | Manual Capture Path | Complete | ~124 unit + 27 instrumented = ~151 |
+| v1.2.3 | Zero-Shutter-Lag Capture | Complete | ~124 unit + 27 instrumented = ~151 |
 
 ---
 
@@ -327,6 +328,24 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - Gallery no-detection path already used default corners
 
 **Files changed:** `CaptureProcessor.kt`, `CameraViewModel.kt`, `CameraScreen.kt` (~25 lines)
+
+---
+
+## v1.2.3: Zero-Shutter-Lag Capture
+
+**Goal:** Eliminate capture latency mismatch where the captured frame differs from the frozen preview overlay due to camera movement during the 50-300ms `takePicture()` delay.
+
+**Problem:** `CAPTURE_MODE_MAXIMIZE_QUALITY` triggers a new sensor capture, introducing 50-300ms+ HAL latency (device-dependent). On slower devices, hand movement during this window causes the JPEG to show a different camera position than the frozen overlay. S21's fast Snapdragon 888 HAL masked this, but slower phones exposed it.
+
+**Solution:** CameraX `CAPTURE_MODE_ZERO_SHUTTER_LAG` (available since CameraX 1.2, DocShot uses 1.4.1). Maintains a 3-frame ring buffer of full-resolution PRIVATE-format frames; on `takePicture()`, selects the buffered frame with the timestamp closest to the trigger — a past frame matching the preview, not a future one. Hardware reprocessing (ISP + JPEG encode) produces full-quality output.
+
+**Changes:**
+- `CameraScreen.kt`: capture mode → `CAPTURE_MODE_ZERO_SHUTTER_LAG`, `@OptIn(ExperimentalZeroShutterLag::class)` on `bindCamera()`, ZSL support logged after binding
+- Flash fallback: CameraX auto-falls back to `MINIMIZE_LATENCY` when flash is ON (ZSL buffer frames predate flash pulse)
+- Device fallback: auto-falls back to `MINIMIZE_LATENCY` on devices without PRIVATE_REPROCESSING
+- Version bump: 1.2.2 → 1.2.3 (versionCode 2000009)
+
+**Files changed:** `CameraScreen.kt`, `build.gradle.kts` (~10 lines)
 
 ---
 
