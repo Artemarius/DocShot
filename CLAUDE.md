@@ -58,7 +58,7 @@ app/src/main/java/com/docshot/
 - **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
 - **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
-- **Next:** Multi-frame AR revival — homography variation gating, FOV-based intrinsics fallback. See [PROJECT.md](PROJECT.md).
+- **Next:** v1.2.5 ultra-low-contrast detection — `DIRECTIONAL_GRADIENT` strategy (5-angle tilted gradient smoothing) + LSD+Radon cascade (bypasses Canny/contours entirely). Target: detect gradients down to ~3 units. See [PROJECT.md](PROJECT.md) and [docs/LOW_CONTRAST_RESEARCH.md](docs/LOW_CONTRAST_RESEARCH.md).
 
 ## Key Architecture Details (for current work)
 
