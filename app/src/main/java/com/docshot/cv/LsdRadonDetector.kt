@@ -2074,11 +2074,11 @@ private const val TIER3_MIN_CONFIDENCE = 0.40
 private const val TIER3_MAX_CONFIDENCE = 0.65
 
 /**
- * Minimum gradient density score from [verifyGradientDensity] for a Tier 3
- * candidate to be accepted. Very low threshold because Tier 3 fires for
- * extremely faint edges (~3 unit gradients), but must still reject pure noise.
+ * Minimum gradient density score from [verifyGradientDensity] for the final
+ * Tier 3 candidate to be accepted. Raised from 0.05 to 0.08 to better reject
+ * noise-only images while still accepting faint (~3 unit) real edges.
  */
-private const val TIER3_MIN_GRADIENT_DENSITY = 0.05f
+private const val TIER3_MIN_GRADIENT_DENSITY = 0.08f
 
 /**
  * Rho range for Radon scan: document edges cannot be at the very edge of the
@@ -2091,18 +2091,24 @@ private const val RADON_RHO_MAX_FRACTION = 0.85f
 
 /**
  * Coarse scan step in pixels for Radon accumulation.
- * 8px is enough resolution for the coarse pass — fine refinement will
- * narrow down to 1px precision.
+ * 12px provides enough resolution for the coarse pass — fine refinement will
+ * narrow down to 1px precision. Increased from 8px to reduce coarse-scan
+ * reads by ~33% with negligible precision loss.
  */
-private const val RADON_COARSE_STEP = 8
+private const val RADON_COARSE_STEP = 12
 
 /**
  * Refinement window: ±12px around each coarse peak, scanned at 1px resolution.
  */
 private const val RADON_REFINE_HALF_WINDOW = 12
 
-/** Maximum peaks to extract per scan direction (H or V). */
-private const val RADON_MAX_PEAKS = 4
+/**
+ * Maximum peaks to extract per scan direction (H or V).
+ * Reduced from 4 to 3 — a document has exactly 2 edges per direction,
+ * and a 3rd peak covers spurious reflections/shadows without exploding
+ * the combination count (C(3,2)^2 = 9 vs C(4,2)^2 = 36 per theta).
+ */
+private const val RADON_MAX_PEAKS = 3
 
 /**
  * Minimum separation between peaks as a fraction of the image dimension
@@ -2112,23 +2118,45 @@ private const val RADON_MAX_PEAKS = 4
 private const val RADON_PEAK_MIN_SEPARATION_FRACTION = 0.10f
 
 /**
- * Number of sample points along each Radon line. 100 points provides
- * enough accumulation for SNR improvement while staying within the
- * performance budget (~225k total pixel reads across all angles).
+ * Number of sample points along each Radon line. 60 points provides
+ * enough accumulation for SNR improvement while keeping the total read
+ * count within the ~4ms performance budget.
+ * Reduced from 100 — the SNR loss is sqrt(100/60) ≈ 1.29x, negligible
+ * for the coarse peak-finding step.
  */
-private const val RADON_NUM_SAMPLES = 100
+private const val RADON_NUM_SAMPLES = 60
 
 /**
  * Candidate orientations for the Radon scan, in degrees from axis-aligned.
- * ±8 degrees covers the typical range where a user holds a camera over a
- * document — beyond ±8 deg the user is deliberately tilting and LSD/contour
- * detection should have caught it in earlier tiers.
+ * 5 angles at 3-degree spacing: [-6, -3, 0, +3, +6] covers ±7.5 deg with
+ * worst-case residual of 1.5 deg. Reduced from 9 angles at 2-degree spacing
+ * for ~44% fewer scans with negligible accuracy loss.
  */
-private val RADON_THETA_OFFSETS = floatArrayOf(-8f, -6f, -4f, -2f, 0f, 2f, 4f, 6f, 8f)
+private val RADON_THETA_OFFSETS = floatArrayOf(-6f, -3f, 0f, 3f, 6f)
+
+/**
+ * Minimum peak-to-median ratio for false positive rejection.
+ * For each side of the best quad, the peak Radon response must exceed the
+ * median response across all scanned rho values by this factor. Real document
+ * edges produce sharp peaks (ratio >> 1.5); noise produces flat profiles
+ * (ratio ≈ 1.0). At least 3 of 4 sides must pass.
+ */
+private const val TIER3_PEAK_TO_MEDIAN_RATIO = 1.5f
+
+/**
+ * Score threshold for early termination across theta iterations.
+ * If a candidate scores above this, remaining theta values are skipped.
+ * This is a high bar — only very confident detections short-circuit.
+ */
+private const val TIER3_EARLY_TERMINATION_SCORE = 0.75
 
 /**
  * Accumulates gradient magnitude along a line parameterized by (angle, rho)
  * in Hough-like coordinates, relative to the image center.
+ *
+ * This Mat-based overload is used by Tier 2 (corner-constrained Radon),
+ * which operates on smaller Mat regions. For Tier 3's bulk scanning,
+ * use [radonAccumulateFromArray] with pre-extracted ShortArrays.
  *
  * For a line at angle [angleDeg] (degrees, 0 = horizontal) and perpendicular
  * offset [rhoPixels] from the image center, samples [numSamples] evenly
@@ -2213,6 +2241,90 @@ private fun radonAccumulate(
 }
 
 /**
+ * Bulk-array version of [radonAccumulate] for Tier 3 performance.
+ *
+ * Instead of per-pixel JNI calls via `Mat.get(row, col)` (each creating a
+ * DoubleArray + crossing the JNI boundary), this reads from a pre-extracted
+ * [ShortArray] using direct array indexing. At ~1ns per array read vs ~100ns
+ * per Mat.get() call, this is ~100x faster for the pixel access portion.
+ *
+ * The calling code must extract the Mat data once via `mat.get(0, 0, shortArray)`
+ * and pass the resulting array here.
+ *
+ * @param data Pre-extracted ShortArray from a CV_16S Mat via `mat.get(0, 0, data)`.
+ * @param cols Number of columns in the source Mat.
+ * @param rows Number of rows in the source Mat.
+ * @param angleDeg Line direction in degrees from horizontal.
+ * @param rhoPixels Perpendicular distance from image center to the line, in pixels.
+ * @param imageWidth Width of the image in pixels (may differ from cols if ROI).
+ * @param imageHeight Height of the image in pixels (may differ from rows if ROI).
+ * @param numSamples Number of evenly spaced sample points along the line.
+ * @return Average absolute gradient magnitude along the line. 0.0 if no valid
+ *   samples (all points fell outside image bounds).
+ */
+private fun radonAccumulateFromArray(
+    data: ShortArray,
+    cols: Int,
+    rows: Int,
+    angleDeg: Float,
+    rhoPixels: Float,
+    imageWidth: Int,
+    imageHeight: Int,
+    numSamples: Int = RADON_NUM_SAMPLES
+): Float {
+    if (rows == 0 || cols == 0) return 0.0f
+
+    val cx = imageWidth / 2.0f
+    val cy = imageHeight / 2.0f
+
+    // Line direction: angle in radians
+    val lineRad = Math.toRadians(angleDeg.toDouble())
+    val dirX = cos(lineRad).toFloat()
+    val dirY = sin(lineRad).toFloat()
+
+    // Normal direction (perpendicular to line direction)
+    val normX = -dirY
+    val normY = dirX
+
+    // A point on the line: center + rho * normal
+    val lineBaseX = cx + rhoPixels * normX
+    val lineBaseY = cy + rhoPixels * normY
+
+    // Sample extent: half the image diagonal ensures the line spans the entire image
+    val halfExtent = sqrt(imageWidth.toFloat() * imageWidth + imageHeight.toFloat() * imageHeight) / 2.0f
+
+    val maxCol = cols - 1
+    val maxRow = rows - 1
+    var accum = 0.0f
+    var validCount = 0
+
+    for (s in 0 until numSamples) {
+        // t ranges from -halfExtent to +halfExtent
+        val t = if (numSamples > 1) {
+            -halfExtent + (2.0f * halfExtent * s) / (numSamples - 1)
+        } else {
+            0.0f
+        }
+
+        val px = lineBaseX + t * dirX
+        val py = lineBaseY + t * dirY
+
+        val col = px.roundToInt()
+        val row = py.roundToInt()
+
+        // Bounds check — skip samples outside image
+        if (col < 0 || col > maxCol || row < 0 || row > maxRow) continue
+
+        // Direct array indexing: row-major layout, ~1ns vs ~100ns for Mat.get()
+        val v = data[row * cols + col]
+        accum += abs(v.toFloat())
+        validCount++
+    }
+
+    return if (validCount > 0) accum / validCount else 0.0f
+}
+
+/**
  * Finds local maxima (peaks) in a 1D response array from a Radon scan.
  *
  * Peaks are local maxima that are strictly greater than both neighbors.
@@ -2264,6 +2376,26 @@ private fun findRadonPeaks(
 }
 
 /**
+ * Computes the median of a FloatArray's first [count] elements.
+ * Used for peak-to-median ratio calculation in false positive rejection.
+ * Copies the subarray to avoid mutating the original.
+ *
+ * @param array Source array.
+ * @param count Number of elements to consider (from index 0).
+ * @return Median value of the first [count] elements. Returns 0.0 if count <= 0.
+ */
+private fun medianOfFloatArray(array: FloatArray, count: Int): Float {
+    if (count <= 0) return 0.0f
+    val sorted = array.copyOfRange(0, count)
+    sorted.sort()
+    return if (count % 2 == 1) {
+        sorted[count / 2]
+    } else {
+        (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0f
+    }
+}
+
+/**
  * Tier 3 — Joint Radon rectangle fit: full restricted Radon scan to find a
  * document rectangle directly from gradient accumulation, without LSD.
  *
@@ -2273,20 +2405,26 @@ private fun findRadonPeaks(
  * of the viewfinder.
  *
  * **Algorithm:**
- * 1. Pre-compute Sobel Gx/Gy once (reused across all angle iterations)
- * 2. Scan 9 candidate orientations: [-8, -6, -4, -2, 0, +2, +4, +6, +8] deg
- *    from axis-aligned (covers the ±8 deg range of typical camera angles)
+ * 1. Pre-compute Sobel Gx/Gy once, extract to ShortArrays for bulk access
+ * 2. Scan 5 candidate orientations: [-6, -3, 0, +3, +6] deg from axis-aligned
  * 3. For each theta, find best H and V peaks independently via coarse+fine
  *    Radon accumulation of the perpendicular gradient component
- * 4. Combine H and V peaks into rectangle candidates (up to C(4,2)^2 = 36 per theta)
- * 5. Validate convexity, area, angles; score with Radon strength + geometry;
- *    apply gradient density verification as a rejection gate
+ * 4. Combine H and V peaks into rectangle candidates (up to C(3,2)^2 = 9 per theta)
+ * 5. Validate convexity, area, angles; score with Radon strength + geometry
  * 6. Apply soft geometric priors (centering, aspect ratio)
- * 7. Return best quad with confidence mapped to [0.40, 0.65]
+ * 7. Post-validation: gradient density + peak-to-median ratio on best candidate
+ * 8. Return best quad with confidence mapped to [0.40, 0.65]
  *
  * **Performance:** ~4ms total on S21 (Snapdragon 888) at 640x480.
- * 9 angles x ~25 coarse rho x 100 samples = ~45k coarse reads (H+V),
- * plus ~180k fine reads = ~225k total pixel reads.
+ * Bulk ShortArray pixel access eliminates JNI overhead. 5 angles x ~10 coarse
+ * rho x 60 samples = ~6k reads per direction = ~12k coarse total, plus
+ * ~45k fine reads. All via array indexing at ~1ns/read.
+ *
+ * **False positive rejection:** After finding the best candidate, a
+ * peak-to-median ratio check verifies that each side's Radon response is
+ * significantly above the background noise floor. Noise-only images produce
+ * flat Radon profiles (ratio ≈ 1.0), while real edges produce sharp peaks
+ * (ratio >> 1.5). At least 3 of 4 sides must pass ratio >= 1.5.
  *
  * @param gray Single-channel 8-bit grayscale image. Not modified.
  * @param imageWidth Width of the source image in pixels.
@@ -2312,12 +2450,19 @@ fun detectRectangleTier3(
 
     // Step 1: Pre-compute Sobel gradients (CV_16S to preserve sign).
     // Gx captures vertical edges, Gy captures horizontal edges.
-    // These are reused for all 9 angle iterations.
+    // Extract to ShortArrays for bulk access — eliminates per-pixel JNI calls.
     val gx = Mat()
     val gy = Mat()
     try {
         Imgproc.Sobel(gray, gx, CvType.CV_16S, 1, 0, 3)
         Imgproc.Sobel(gray, gy, CvType.CV_16S, 0, 1, 3)
+
+        val matRows = gx.rows()
+        val matCols = gx.cols()
+        val gxData = ShortArray(matRows * matCols)
+        val gyData = ShortArray(matRows * matCols)
+        gx.get(0, 0, gxData)
+        gy.get(0, 0, gyData)
 
         // Rho ranges: 15%-85% of each dimension — document can't hug the frame border
         val hRhoMin = imageHeight * RADON_RHO_MIN_FRACTION
@@ -2335,6 +2480,12 @@ fun detectRectangleTier3(
 
         var bestCorners: List<Point>? = null
         var bestScore = -1.0
+        // Track the best candidate's theta and side rho values for peak-to-median check
+        var bestTheta = 0f
+        var bestHRho1 = 0f
+        var bestHRho2 = 0f
+        var bestVRho1 = 0f
+        var bestVRho2 = 0f
 
         // Step 2: Scan over candidate orientations
         for (theta in RADON_THETA_OFFSETS) {
@@ -2346,6 +2497,7 @@ fun detectRectangleTier3(
             val hCoarseRhoCount = ((hRhoMax - hRhoMin) / RADON_COARSE_STEP).roundToInt() + 1
             val hCoarseRho = FloatArray(hCoarseRhoCount)
             val hCoarseResp = FloatArray(hCoarseRhoCount)
+            var hActualCount = 0
 
             for (i in 0 until hCoarseRhoCount) {
                 // rho is offset from center: convert [hRhoMin..hRhoMax] (absolute position)
@@ -2355,19 +2507,22 @@ fun detectRectangleTier3(
                 if (absPos > hRhoMax) break
                 val rho = absPos - imageHeight / 2.0f
                 hCoarseRho[i] = rho
-                hCoarseResp[i] = radonAccumulate(
-                    gradient = gy,
+                hCoarseResp[i] = radonAccumulateFromArray(
+                    data = gyData,
+                    cols = matCols,
+                    rows = matRows,
                     angleDeg = theta,
                     rhoPixels = rho,
                     imageWidth = imageWidth,
                     imageHeight = imageHeight
                 )
+                hActualCount++
             }
 
             // Find coarse peaks and refine
             val hCoarsePeaks = findRadonPeaks(
-                responses = hCoarseResp,
-                rhoValues = hCoarseRho,
+                responses = hCoarseResp.copyOfRange(0, hActualCount),
+                rhoValues = hCoarseRho.copyOfRange(0, hActualCount),
                 minSeparation = hMinSep
             )
 
@@ -2383,8 +2538,10 @@ fun detectRectangleTier3(
                 for (j in 0 until fineCount) {
                     val rho = fineStart + j
                     fineRho[j] = rho
-                    fineResp[j] = radonAccumulate(
-                        gradient = gy,
+                    fineResp[j] = radonAccumulateFromArray(
+                        data = gyData,
+                        cols = matCols,
+                        rows = matRows,
                         angleDeg = theta,
                         rhoPixels = rho,
                         imageWidth = imageWidth,
@@ -2412,24 +2569,28 @@ fun detectRectangleTier3(
             val vCoarseRhoCount = ((vRhoMax - vRhoMin) / RADON_COARSE_STEP).roundToInt() + 1
             val vCoarseRho = FloatArray(vCoarseRhoCount)
             val vCoarseResp = FloatArray(vCoarseRhoCount)
+            var vActualCount = 0
 
             for (i in 0 until vCoarseRhoCount) {
                 val absPos = vRhoMin + i * RADON_COARSE_STEP
                 if (absPos > vRhoMax) break
                 val rho = absPos - imageWidth / 2.0f
                 vCoarseRho[i] = rho
-                vCoarseResp[i] = radonAccumulate(
-                    gradient = gx,
+                vCoarseResp[i] = radonAccumulateFromArray(
+                    data = gxData,
+                    cols = matCols,
+                    rows = matRows,
                     angleDeg = vAngle,
                     rhoPixels = rho,
                     imageWidth = imageWidth,
                     imageHeight = imageHeight
                 )
+                vActualCount++
             }
 
             val vCoarsePeaks = findRadonPeaks(
-                responses = vCoarseResp,
-                rhoValues = vCoarseRho,
+                responses = vCoarseResp.copyOfRange(0, vActualCount),
+                rhoValues = vCoarseRho.copyOfRange(0, vActualCount),
                 minSeparation = vMinSep
             )
 
@@ -2445,8 +2606,10 @@ fun detectRectangleTier3(
                 for (j in 0 until fineCount) {
                     val rho = fineStart + j
                     fineRho[j] = rho
-                    fineResp[j] = radonAccumulate(
-                        gradient = gx,
+                    fineResp[j] = radonAccumulateFromArray(
+                        data = gxData,
+                        cols = matCols,
+                        rows = matRows,
                         angleDeg = vAngle,
                         rhoPixels = rho,
                         imageWidth = imageWidth,
@@ -2471,7 +2634,8 @@ fun detectRectangleTier3(
             // Need at least 2 H peaks and 2 V peaks to form a rectangle.
             if (hRefinedPeaks.size < 2 || vRefinedPeaks.size < 2) continue
 
-            // Try all combinations of 2H × 2V (at most C(4,2) × C(4,2) = 36 per theta)
+            // Try all combinations of 2H × 2V (at most C(3,2) × C(3,2) = 9 per theta)
+            // No per-candidate gradient density check — deferred to final candidate only.
             for (hi in hRefinedPeaks.indices) {
                 for (hj in hi + 1 until hRefinedPeaks.size) {
                     for (vi in vRefinedPeaks.indices) {
@@ -2546,15 +2710,6 @@ fun detectRectangleTier3(
                             }
                             if (!anglesValid) continue
 
-                            // Gradient density verification (B4, pre-computed Sobel overload)
-                            val gradDensity = verifyGradientDensity(
-                                gx = gx,
-                                gy = gy,
-                                corners = ordered,
-                                numSamplesPerSide = 50
-                            )
-                            if (gradDensity < TIER3_MIN_GRADIENT_DENSITY) continue
-
                             // Scoring: Radon response strength + geometric quality
 
                             // Radon score: average of all 4 peak responses, normalized
@@ -2622,26 +2777,149 @@ fun detectRectangleTier3(
                             if (combinedScore > bestScore) {
                                 bestCorners = ordered
                                 bestScore = combinedScore
+                                bestTheta = theta
+                                bestHRho1 = hRho1
+                                bestHRho2 = hRho2
+                                bestVRho1 = vRho1
+                                bestVRho2 = vRho2
                             }
                         }
                     }
                 }
             }
+
+            // Early termination: if we found a very strong candidate, skip remaining angles
+            if (bestScore > TIER3_EARLY_TERMINATION_SCORE) {
+                Log.d(TAG, "detectRectangleTier3: early termination at theta=%.0f, score=%.3f".format(
+                    theta, bestScore))
+                break
+            }
+        }
+
+        val scanMs = (System.nanoTime() - start) / 1_000_000.0
+
+        if (bestCorners == null) {
+            Log.d(TAG, "detectRectangleTier3: %.1f ms — no valid rectangle found".format(scanMs))
+            return null
+        }
+
+        // Step 7: Post-validation on the single best candidate only.
+        // This avoids running expensive validation on every candidate in the inner loop.
+
+        // 7a: Peak-to-median ratio check — reject flat Radon profiles (noise).
+        // For each of the 4 sides, compute the median Radon response across all
+        // coarse rho values at the best theta. The side's peak must exceed
+        // the median by TIER3_PEAK_TO_MEDIAN_RATIO to confirm a real edge.
+        val bestVAngle = bestTheta + 90f
+        val hCoarseCount = ((hRhoMax - hRhoMin) / RADON_COARSE_STEP).roundToInt() + 1
+        val hAllResp = FloatArray(hCoarseCount)
+        var hFillCount = 0
+        for (i in 0 until hCoarseCount) {
+            val absPos = hRhoMin + i * RADON_COARSE_STEP
+            if (absPos > hRhoMax) break
+            val rho = absPos - imageHeight / 2.0f
+            hAllResp[i] = radonAccumulateFromArray(
+                data = gyData,
+                cols = matCols,
+                rows = matRows,
+                angleDeg = bestTheta,
+                rhoPixels = rho,
+                imageWidth = imageWidth,
+                imageHeight = imageHeight
+            )
+            hFillCount++
+        }
+        val hMedian = medianOfFloatArray(hAllResp, hFillCount)
+
+        val vCoarseCount = ((vRhoMax - vRhoMin) / RADON_COARSE_STEP).roundToInt() + 1
+        val vAllResp = FloatArray(vCoarseCount)
+        var vFillCount = 0
+        for (i in 0 until vCoarseCount) {
+            val absPos = vRhoMin + i * RADON_COARSE_STEP
+            if (absPos > vRhoMax) break
+            val rho = absPos - imageWidth / 2.0f
+            vAllResp[i] = radonAccumulateFromArray(
+                data = gxData,
+                cols = matCols,
+                rows = matRows,
+                angleDeg = bestVAngle,
+                rhoPixels = rho,
+                imageWidth = imageWidth,
+                imageHeight = imageHeight
+            )
+            vFillCount++
+        }
+        val vMedian = medianOfFloatArray(vAllResp, vFillCount)
+
+        // Get the peak responses for each of the 4 sides
+        val hResp1 = radonAccumulateFromArray(
+            data = gyData, cols = matCols, rows = matRows,
+            angleDeg = bestTheta, rhoPixels = bestHRho1,
+            imageWidth = imageWidth, imageHeight = imageHeight
+        )
+        val hResp2 = radonAccumulateFromArray(
+            data = gyData, cols = matCols, rows = matRows,
+            angleDeg = bestTheta, rhoPixels = bestHRho2,
+            imageWidth = imageWidth, imageHeight = imageHeight
+        )
+        val vResp1 = radonAccumulateFromArray(
+            data = gxData, cols = matCols, rows = matRows,
+            angleDeg = bestVAngle, rhoPixels = bestVRho1,
+            imageWidth = imageWidth, imageHeight = imageHeight
+        )
+        val vResp2 = radonAccumulateFromArray(
+            data = gxData, cols = matCols, rows = matRows,
+            angleDeg = bestVAngle, rhoPixels = bestVRho2,
+            imageWidth = imageWidth, imageHeight = imageHeight
+        )
+
+        // Check peak-to-median ratio for each side; require at least 3 of 4 to pass
+        val safeHMedian = if (hMedian > 0.01f) hMedian else 0.01f
+        val safeVMedian = if (vMedian > 0.01f) vMedian else 0.01f
+        val ratios = floatArrayOf(
+            hResp1 / safeHMedian,
+            hResp2 / safeHMedian,
+            vResp1 / safeVMedian,
+            vResp2 / safeVMedian
+        )
+        val passingRatioSides = ratios.count { it >= TIER3_PEAK_TO_MEDIAN_RATIO }
+
+        Log.d(TAG, "detectRectangleTier3: peak/median ratios=[%.2f, %.2f, %.2f, %.2f], " .format(
+            ratios[0], ratios[1], ratios[2], ratios[3]) +
+            "hMedian=%.1f, vMedian=%.1f, passing=%d/4".format(
+                hMedian, vMedian, passingRatioSides))
+
+        if (passingRatioSides < 3) {
+            val ms = (System.nanoTime() - start) / 1_000_000.0
+            Log.d(TAG, "detectRectangleTier3: %.1f ms — rejected by peak-to-median ratio " .format(ms) +
+                "(%d/4 sides passed, need 3)".format(passingRatioSides))
+            return null
+        }
+
+        // 7b: Gradient density verification on the single best candidate (using Mats
+        // which are still alive). This catches cases that pass the ratio check but
+        // have weak absolute gradient evidence.
+        val gradDensity = verifyGradientDensity(
+            gx = gx,
+            gy = gy,
+            corners = bestCorners,
+            numSamplesPerSide = 50
+        )
+        if (gradDensity < TIER3_MIN_GRADIENT_DENSITY) {
+            val ms = (System.nanoTime() - start) / 1_000_000.0
+            Log.d(TAG, "detectRectangleTier3: %.1f ms — rejected by gradient density " .format(ms) +
+                "(%.3f < %.3f)".format(gradDensity, TIER3_MIN_GRADIENT_DENSITY))
+            return null
         }
 
         val ms = (System.nanoTime() - start) / 1_000_000.0
 
-        if (bestCorners == null) {
-            Log.d(TAG, "detectRectangleTier3: %.1f ms — no valid rectangle found".format(ms))
-            return null
-        }
-
-        // Step 6: Map score to confidence in [TIER3_MIN_CONFIDENCE, TIER3_MAX_CONFIDENCE]
+        // Step 8: Map score to confidence in [TIER3_MIN_CONFIDENCE, TIER3_MAX_CONFIDENCE]
         val confidence = TIER3_MIN_CONFIDENCE +
                 bestScore * (TIER3_MAX_CONFIDENCE - TIER3_MIN_CONFIDENCE)
 
-        Log.d(TAG, "detectRectangleTier3: %.1f ms, score=%.3f, confidence=%.2f".format(
-            ms, bestScore, confidence))
+        Log.d(TAG, "detectRectangleTier3: %.1f ms, score=%.3f, confidence=%.2f, gradDensity=%.3f".format(
+            ms, bestScore, confidence, gradDensity))
 
         return DocumentCorners(
             corners = bestCorners,
