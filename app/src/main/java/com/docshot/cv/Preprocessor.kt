@@ -801,11 +801,61 @@ private fun preprocessDirectionalGradient(input: Mat, pool: MatPool? = null, sha
     absGx.release()
     absGy.release()
 
-    // Step 4: Pre-compute offset tables and accumulate directional responses.
+    // Step 4-6: Accumulate directional responses + normalize + threshold.
+    // Native C++ path (~4-6ms) vs Kotlin fallback (~17-22ms).
     val table = getOffsetTable(cols)
     val marginY = maxOf(table.hMarginY, table.vMarginY)
     val marginX = maxOf(table.hMarginX, table.vMarginX)
+    val totalPixels = rows * cols
+    val resultData = ByteArray(totalPixels)
 
+    if (NativeAccel.isAvailable) {
+        // Flatten 2D offset tables to 1D for JNI
+        val flatH = IntArray(NUM_ANGLES * KERNEL_LENGTH)
+        val flatV = IntArray(NUM_ANGLES * KERNEL_LENGTH)
+        for (a in 0 until NUM_ANGLES) {
+            System.arraycopy(table.hOffsets[a], 0, flatH, a * KERNEL_LENGTH, KERNEL_LENGTH)
+            System.arraycopy(table.vOffsets[a], 0, flatV, a * KERNEL_LENGTH, KERNEL_LENGTH)
+        }
+        NativeAccel.nativeDirectionalGradient(
+            gyData, gxData, resultData,
+            rows, cols, flatH, flatV,
+            NUM_ANGLES, KERNEL_LENGTH,
+            marginY, marginX, 0.90f
+        )
+    } else {
+        directionalGradientKotlinFallback(
+            gyData, gxData, resultData, rows, cols, table, marginY, marginX
+        )
+    }
+
+    // resultData is already binary (0 or 255) from native/Kotlin path
+    val smallBinary = Mat(rows, cols, CvType.CV_8UC1)
+    smallBinary.put(0, 0, resultData)
+
+    // Step 7: Resize binary edge map back to original resolution, then morph close.
+    // INTER_NEAREST preserves binary values (0/255) without introducing gray pixels.
+    val binary = Mat()
+    Imgproc.resize(smallBinary, binary, Size(origCols.toDouble(), origRows.toDouble()), 0.0, 0.0, Imgproc.INTER_NEAREST)
+    smallBinary.release()
+
+    Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
+
+    return binary
+}
+
+/**
+ * Pure-Kotlin implementation of DIRECTIONAL_GRADIENT steps 4-6.
+ * Used as fallback when native acceleration is unavailable.
+ * Writes normalized + thresholded binary result into [resultData].
+ */
+private fun directionalGradientKotlinFallback(
+    gyData: ByteArray, gxData: ByteArray,
+    resultData: ByteArray,
+    rows: Int, cols: Int,
+    table: OffsetTable,
+    marginY: Int, marginX: Int
+) {
     val totalPixels = rows * cols
     val hResponse = IntArray(totalPixels)
     val vResponse = IntArray(totalPixels)
@@ -830,7 +880,7 @@ private fun preprocessDirectionalGradient(input: Mat, pool: MatPool? = null, sha
         }
     }
 
-    // Step 5: Combine H and V, normalize to 0-255, build histogram in one pass.
+    // Combine H and V, normalize to 0-255, build histogram
     var globalMax = 1
     for (i in 0 until totalPixels) {
         val combined = maxOf(hResponse[i], vResponse[i])
@@ -838,7 +888,6 @@ private fun preprocessDirectionalGradient(input: Mat, pool: MatPool? = null, sha
         if (combined > globalMax) globalMax = combined
     }
 
-    val resultData = ByteArray(totalPixels)
     val histogram = IntArray(256)
     for (i in 0 until totalPixels) {
         val normalized = (hResponse[i] * 255L / globalMax).toInt().coerceIn(0, 255)
@@ -846,7 +895,7 @@ private fun preprocessDirectionalGradient(input: Mat, pool: MatPool? = null, sha
         histogram[normalized]++
     }
 
-    // Step 6: 90th percentile threshold.
+    // 90th percentile threshold
     val target = (totalPixels * 0.90).toInt()
     var cumSum = 0
     var thresholdVal = 255
@@ -858,20 +907,9 @@ private fun preprocessDirectionalGradient(input: Mat, pool: MatPool? = null, sha
         }
     }
 
-    val smallBinary = Mat(rows, cols, CvType.CV_8UC1)
-    smallBinary.put(0, 0, resultData)
-
-    val threshed = Mat()
-    Imgproc.threshold(smallBinary, threshed, thresholdVal.toDouble(), 255.0, Imgproc.THRESH_BINARY)
-    smallBinary.release()
-
-    // Step 7: Resize binary edge map back to original resolution, then morph close.
-    // INTER_NEAREST preserves binary values (0/255) without introducing gray pixels.
-    val binary = Mat()
-    Imgproc.resize(threshed, binary, Size(origCols.toDouble(), origRows.toDouble()), 0.0, 0.0, Imgproc.INTER_NEAREST)
-    threshed.release()
-
-    Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
-
-    return binary
+    // Apply threshold in-place
+    for (i in 0 until totalPixels) {
+        val v = resultData[i].toInt() and 0xFF
+        resultData[i] = if (v > thresholdVal) 255.toByte() else 0
+    }
 }

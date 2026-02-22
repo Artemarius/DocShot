@@ -19,6 +19,7 @@ Android document rectification app. Camera input -> automatic document boundary 
 - CameraX ImageAnalysis runs at STRATEGY_KEEP_ONLY_LATEST to avoid frame queue buildup
 - Separate detection (runs every frame, must be <30ms) from rectification (runs once on capture, can take up to 200ms)
 - All OpenCV calls go through Kotlin wrapper functions in the `cv/` package -- no raw OpenCV calls in UI or camera code
+- Native C++ acceleration via JNI for hot paths only; `NativeAccel.isAvailable` guards all native calls with Kotlin fallback. Use `GetPrimitiveArrayCritical` for zero-copy array pinning in short (<10ms) JNI calls
 
 ## Build & Run
 ```bash
@@ -42,15 +43,20 @@ Android document rectification app. Camera input -> automatic document boundary 
 - Corner ordering: consistent TL, TR, BR, BL based on sum/difference of coordinates
 - Output dimensions: derive from longest edge pairs to preserve document aspect ratio
 - Always use `Imgproc.INTER_CUBIC` for the final warp, `INTER_LINEAR` for preview
-- 11 preprocessing strategies: 5 original (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) + 6 low-contrast (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION, DIRECTIONAL_GRADIENT) with scene analysis, white-on-white detection, and 25ms time budget + LSD+Radon cascade fallback
+- 11 preprocessing strategies: 5 original (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) + 6 low-contrast (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION, DIRECTIONAL_GRADIENT) with scene analysis, white-on-white detection, and 25ms time budget + LSD+Radon cascade fallback. DIRECTIONAL_GRADIENT hot loop accelerated via JNI/NDK C++ (libdocshot_native.so)
 
 ## File Structure
 ```
-app/src/main/java/com/docshot/
-├── ui/          # Compose screens + navigation
-├── camera/      # CameraX setup, frame analysis, QuadSmoother, CornerTracker
-├── cv/          # Document detection, rectification, post-processing, LSD+Radon detector
-└── util/        # Permissions, image I/O, gallery save, DataStore prefs
+app/src/main/
+├── java/com/docshot/
+│   ├── ui/          # Compose screens + navigation
+│   ├── camera/      # CameraX setup, frame analysis, QuadSmoother, CornerTracker
+│   ├── cv/          # Document detection, rectification, post-processing, LSD+Radon detector, NativeAccel JNI bridge
+│   └── util/        # Permissions, image I/O, gallery save, DataStore prefs
+└── cpp/             # NDK native code (libdocshot_native.so)
+    ├── CMakeLists.txt
+    ├── directional_gradient.cpp/h   # C++ hot loop for DIRECTIONAL_GRADIENT steps 4-6
+    └── jni_bridge.cpp               # JNI entry point (GetPrimitiveArrayCritical zero-copy)
 ```
 
 ## Current State (v1.2.5-dev)
@@ -59,10 +65,10 @@ app/src/main/java/com/docshot/
 - **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
 - **v1.2.5 implementation complete, awaiting on-device validation.** Ultra-low-contrast detection — two new detection paths for gradients down to ~3 units:
-  - `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 1D kernel smoothing of Sobel gradients, 90th percentile threshold, binary output. Position #2 in white-on-white strategy list after DOG.
+  - `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 1D kernel smoothing of Sobel gradients, 90th percentile threshold, binary output. Position #2 in white-on-white strategy list after DOG. **JNI/NDK native acceleration**: hot loop (steps 4-6) in C++ via `libdocshot_native.so`, Kotlin fallback when unavailable. S21 benchmark: 22ms → 16ms full pipeline (9.7x speedup on hot loop alone).
   - `LsdRadonDetector`: entirely new detection path bypassing Canny/contours. Three-tier cascade: LSD segment detection (quant=1.0, ~2.6 unit threshold) → corner-constrained Radon → joint Radon rectangle fit. Invoked as fallback after strategy loop for white-on-white scenes.
-  - Test infrastructure: 5 ultra-low-contrast synthetic generators (3-unit, 5-unit, noisy, tilted, warm), `UltraLowContrastBenchmarkTest`, `LsdRadonBenchmarkTest` (7 test methods including false positive guards).
-  - **Next:** On-device S21 benchmarks + real-world validation (A3, A4, B9).
+  - Test infrastructure: 5 ultra-low-contrast synthetic generators (3-unit, 5-unit, noisy, tilted, warm), `UltraLowContrastBenchmarkTest`, `LsdRadonBenchmarkTest` (7 test methods including false positive guards), `NativeAccelTest` (differential correctness + benchmark).
+  - **Next:** On-device real-world validation (A3, A4, B9).
 
 ## Key Architecture Details (for current work)
 
@@ -100,7 +106,7 @@ app/src/main/java/com/docshot/
 - Test infrastructure: 6 synthetic generators (whiteOnNearWhite..glossyPaper) + 5 ultra-low-contrast generators (3-unit, 5-unit, noisy, tilted, warm), `LowContrastBenchmarkTest` + `UltraLowContrastBenchmarkTest` per-strategy harness, false positive guards
 
 ### Ultra-Low-Contrast Detection — LSD+Radon Cascade (v1.2.5)
-- `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 21px kernels smooth Sobel Gx/Gy along candidate edge directions, per-pixel max across angles, 90th percentile threshold → binary. ~5 unit detection floor. Position #2 in white-on-white list (after DOG).
+- `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 21px kernels smooth Sobel Gx/Gy along candidate edge directions, per-pixel max across angles, 90th percentile threshold → binary. ~5 unit detection floor. Position #2 in white-on-white list (after DOG). Hot loop (accumulation + normalize + threshold) runs in native C++ via JNI for ~9.7x speedup over Kotlin/ART; Kotlin fallback when `NativeAccel.isAvailable` is false.
 - `LsdRadonDetector`: separate detection path (not a PreprocessStrategy), invoked as fallback after strategy loop exhaustion for white-on-white scenes only. Runs outside 25ms time budget (~10ms worst case).
   - Tier 1 (LSD fast path): `createLineSegmentDetector(quant=1.0)` → segment clustering (8deg/15px tolerance) → 2H×2V rectangle formation. ~2.6 unit detection floor, ~2.5ms.
   - Tier 2 (corner-constrained Radon): rescues 2-3 edge partial detections via coarse-to-fine restricted Radon search (perpendicular gradient only, ±12deg). +2ms.
@@ -119,11 +125,12 @@ app/src/main/java/com/docshot/
 - Full capture pipeline: < 200ms (detect + warp + save)
 - Memory: < 150MB including camera buffers
 - Profile with `System.nanoTime()` around key operations, log in debug
-- **Validated on S21 (Snapdragon 888):** KLT-only 2.1ms median, KLT+correction 11.8ms median, 97.2% of tracked frames under 30ms. No-doc scanning ~30ms (exhausts all strategies). Capture pipeline 478ms total (307ms JPEG decode, ~88ms CV).
+- **Validated on S21 (Snapdragon 888):** KLT-only 2.1ms median, KLT+correction 11.8ms median, 97.2% of tracked frames under 30ms. No-doc scanning ~30ms (exhausts all strategies). Capture pipeline 478ms total (307ms JPEG decode, ~88ms CV). DIRECTIONAL_GRADIENT with native acceleration: 16ms full pipeline (down from 22ms Kotlin-only).
 
 ## Key Dependencies (versions pinned in gradle/libs.versions.toml)
 - AGP: 8.7.3
 - Kotlin: 2.0.21
+- NDK: 27.0.12077973 (for libdocshot_native.so)
 - OpenCV Android SDK: 4.12.0
 - CameraX: 1.4.1
 - Compose BOM: 2024.12.01

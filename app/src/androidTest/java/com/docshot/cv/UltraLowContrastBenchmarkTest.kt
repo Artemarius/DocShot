@@ -187,6 +187,64 @@ class UltraLowContrastBenchmarkTest {
         Log.d(TAG, "=".repeat(80))
     }
 
+    /**
+     * Benchmarks the DIRECTIONAL_GRADIENT strategy's preprocessing time in isolation.
+     * Logs native vs Kotlin path timing and verifies all 5 synthetics still detect
+     * through the full pipeline with native acceleration.
+     */
+    @Test
+    fun benchmarkDirectionalGradientNative() {
+        Log.d(TAG, "NativeAccel.isAvailable=${NativeAccel.isAvailable}")
+
+        val images = mapOf(
+            "ultraLC_3unit" to SyntheticImageFactory.ultraLowContrast3Unit(),
+            "ultraLC_5unit" to SyntheticImageFactory.ultraLowContrast5Unit(),
+            "ultraLC_5unit_noisy" to SyntheticImageFactory.ultraLowContrast5UnitNoisy(),
+            "ultraLC_tilted8" to SyntheticImageFactory.ultraLowContrastTilted8deg(),
+            "ultraLC_3unit_warm" to SyntheticImageFactory.ultraLowContrast3UnitWarm()
+        )
+
+        Log.d(TAG, "=".repeat(80))
+        Log.d(TAG, "DIRECTIONAL_GRADIENT preprocessing benchmark (native=${NativeAccel.isAvailable}):")
+        Log.d(TAG, "-".repeat(80))
+
+        for ((name, imageAndCorners) in images) {
+            val (image, groundTruth) = imageAndCorners
+            invalidateSceneCache()
+
+            // Time just the preprocessing step
+            val prepStart = System.nanoTime()
+            val preprocessed = preprocessWithStrategy(image, PreprocessStrategy.DIRECTIONAL_GRADIENT)
+            val prepMs = (System.nanoTime() - prepStart) / 1_000_000.0
+            preprocessed.release()
+
+            // Full detection with this strategy
+            invalidateSceneCache()
+            val detectStart = System.nanoTime()
+            val status = detectWithStrategy(image, PreprocessStrategy.DIRECTIONAL_GRADIENT)
+            val detectMs = (System.nanoTime() - detectStart) / 1_000_000.0
+
+            val detection = status.result
+            val cornerError = if (detection != null) {
+                maxCornerError(detection.corners, groundTruth)
+            } else {
+                null
+            }
+
+            Log.d(TAG, "%-22s preprocess=%.1fms detect=%.1fms found=%-3s conf=%.2f maxErr=%s".format(
+                name,
+                prepMs,
+                detectMs,
+                if (detection != null) "YES" else "no",
+                detection?.confidence ?: 0.0,
+                cornerError?.let { "%.1fpx".format(it) } ?: "N/A"
+            ))
+
+            image.release()
+        }
+        Log.d(TAG, "=".repeat(80))
+    }
+
     private fun maxCornerError(detected: List<Point>, expected: List<Point>): Double {
         val orderedDetected = orderCorners(detected)
         val orderedExpected = orderCorners(expected)

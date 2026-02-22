@@ -25,6 +25,7 @@
 | v1.2.2 | Manual Capture Path | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.3 | Zero-Shutter-Lag Capture | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.4 | Low-Contrast Detection | Complete | ~124 unit + 32 instrumented = ~156 |
+| v1.2.5 | Ultra-Low-Contrast + Native Accel | In Progress | ~124 unit + 35 instrumented = ~159 |
 
 ---
 
@@ -375,6 +376,47 @@ Smoother hardening sufficient for v1. Superseded by v1.2.0 KLT corner tracking p
 - 5 new regression tests (3 detection + 2 false positive guards)
 
 **Files changed:** `Preprocessor.kt`, `DocumentDetector.kt`, `SyntheticImageFactory.kt`, `DetectionRegressionTest.kt`, new `LowContrastBenchmarkTest.kt`, `build.gradle.kts`
+
+---
+
+## v1.2.5: Ultra-Low-Contrast Detection + JNI Native Acceleration
+
+**Goal:** Detect documents with boundary gradients down to ~3 units (ultra-low-contrast white-on-white) and accelerate the DIRECTIONAL_GRADIENT hot loop via NDK/JNI.
+
+### DIRECTIONAL_GRADIENT Strategy
+- 5-angle tilted 21px 1D kernel smoothing of Sobel |Gx|/|Gy| along candidate edge directions
+- Per-pixel max across angles, 90th percentile histogram threshold → binary output
+- ~5 unit detection floor, position #2 in white-on-white strategy list after DOG
+- 2x downsample optimization: 400x300 inner loop (~25M ops) instead of 800x600 (~100M)
+
+### JNI/NDK Native Acceleration
+- First native code in the project: `libdocshot_native.so` built for arm64-v8a + armeabi-v7a
+- Hot loop (steps 4-6: accumulation + normalize + threshold) moved to C++ with `-O2 -ffast-math`
+- JNI bridge uses `GetPrimitiveArrayCritical` for zero-copy array pinning
+- `NativeAccel` singleton: `System.loadLibrary` with `isAvailable` guard, Kotlin fallback
+- **S21 benchmark:** Hot loop 128.8ms (Kotlin) → 13.2ms (native) = 9.7x speedup. Full pipeline 22ms → 16ms.
+- Differential correctness: 0/120000 byte mismatches across 4 synthetic test images
+
+### LSD+Radon Cascade (separate detection path)
+- `LsdRadonDetector`: bypasses Canny/contours entirely, invoked as fallback after strategy loop for white-on-white scenes
+- Tier 1 (LSD fast path): `createLineSegmentDetector(quant=1.0)` → segment clustering → rectangle formation. ~2.6 unit floor, ~2.5ms
+- Tier 2 (corner-constrained Radon): rescues partial detections via restricted Radon search. +2ms
+- Tier 3 (joint Radon rectangle fit): full scan, 9 angles, independent H/V peak search. +4ms
+
+### Test Infrastructure
+- 5 ultra-low-contrast synthetic generators (3-unit, 5-unit, noisy, tilted, warm)
+- `UltraLowContrastBenchmarkTest`: per-strategy + full pipeline benchmarks + native integration benchmark
+- `LsdRadonBenchmarkTest`: 7 test methods including false positive guards
+- `NativeAccelTest`: differential correctness (byte-for-byte native vs Kotlin) + timing benchmark
+
+### Build Infrastructure
+- `app/src/main/cpp/`: CMakeLists.txt, directional_gradient.cpp/h, jni_bridge.cpp
+- `build.gradle.kts`: ndkVersion 27.0.12077973, externalNativeBuild cmake config, NEON flag
+- ABI splits unchanged (arm64-v8a + armeabi-v7a) — .so included in both
+
+**Status:** Implementation complete + native acceleration validated on S21. Awaiting real-world validation (A3, A4, B9).
+
+**Files changed:** `Preprocessor.kt`, `build.gradle.kts`, new `NativeAccel.kt`, new `app/src/main/cpp/*`, new `NativeAccelTest.kt`, `UltraLowContrastBenchmarkTest.kt`, plus LSD+Radon files from earlier commits
 
 ---
 

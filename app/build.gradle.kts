@@ -17,6 +17,8 @@ android {
     namespace = "com.docshot"
     compileSdk = 36
 
+    ndkVersion = "27.0.12077973"
+
     defaultConfig {
         applicationId = "com.docshot"
         minSdk = 24
@@ -27,6 +29,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // ABI filtering moved to splits block below — ndk.abiFilters conflicts with splits.abi
+
+        externalNativeBuild {
+            cmake {
+                arguments("-DANDROID_ARM_NEON=TRUE", "-DANDROID_STL=c++_shared")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     signingConfigs {
