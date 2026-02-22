@@ -59,16 +59,18 @@ app/src/main/
     └── jni_bridge.cpp               # JNI entry point (GetPrimitiveArrayCritical zero-copy)
 ```
 
-## Current State (v1.2.5-dev)
+## Current State (v1.2.5)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
 - **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
-- **v1.2.5 implementation complete, awaiting on-device validation.** Ultra-low-contrast detection — two new detection paths for gradients down to ~3 units:
+- **v1.2.5 implementation complete (WP-A through WP-E5), E6 in-field validation remaining.** Ultra-low-contrast detection + low-contrast non-white fixes:
   - `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 1D kernel smoothing of Sobel gradients, 90th percentile threshold, binary output. Position #2 in white-on-white strategy list after DOG. **JNI/NDK native acceleration**: hot loop (steps 4-6) in C++ via `libdocshot_native.so`, Kotlin fallback when unavailable. S21 benchmark: 22ms → 16ms full pipeline (9.7x speedup on hot loop alone).
   - `LsdRadonDetector`: entirely new detection path bypassing Canny/contours. Three-tier cascade: LSD segment detection (quant=1.0, ~2.6 unit threshold) → corner-constrained Radon → joint Radon rectangle fit. Invoked as fallback after strategy loop for white-on-white scenes.
-  - Test infrastructure: 5 ultra-low-contrast synthetic generators (3-unit, 5-unit, noisy, tilted, warm), `UltraLowContrastBenchmarkTest`, `LsdRadonBenchmarkTest` (7 test methods including false positive guards), `NativeAccelTest` (differential correctness + benchmark).
-  - **Next:** On-device real-world validation (A3, A4, B9).
+  - **WP-C (strategy broadening) complete:** `isLowContrast` threshold raised from stddev<30 to stddev<40. DOG and GRADIENT_MAGNITUDE added to low-contrast non-white strategy list. Scenes with mean 120-180, stddev<40 now get advanced strategies that were previously gated behind isWhiteOnWhite.
+  - **WP-D (line suppression) complete:** `suppressSpanningLines()` in EdgeDetector.kt — HoughLinesP detects image-spanning lines, `spansOppositeBorders` filter (left↔right or top↔bottom), zero-strip + morph close junction healing. Wired into detectWithStrategy() between edge production and contour analysis.
+  - **69/69 instrumented tests pass on S21.** 23 new test methods + 6 new synthetic generators. Key parameter tuning during testing: HOUGH_THRESHOLD 80→150 (noise rejection), MASKING_THICKNESS 5→3 (junction healing), isNearBorder→spansOppositeBorders (partial doc protection).
+  - **E6 in-field validated (S21):** Beige tile scene (the original failure) — auto-capture at 0.77 confidence via DOG + line suppression. 1-10 spanning lines suppressed per frame. Zero-tap capture where previously manual-only.
 
 ## Key Architecture Details (for current work)
 
@@ -103,7 +105,7 @@ app/src/main/
 - `PreprocessStrategy.isBinaryOutput`: ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE, MULTICHANNEL_FUSION, DIRECTIONAL_GRADIENT bypass Canny in `detectWithStrategy()` — preprocessed output is the edge map
 - Non-white-on-white scenes keep existing 5-strategy pipeline — zero performance regression
 - Pipeline efficiency: DOG short-circuits on first attempt (~3ms) vs old pipeline STANDARD(fail, ~8ms) → CLAHE(~5ms) = ~13ms. ~4x faster for white-on-white.
-- Test infrastructure: 6 synthetic generators (whiteOnNearWhite..glossyPaper) + 5 ultra-low-contrast generators (3-unit, 5-unit, noisy, tilted, warm), `LowContrastBenchmarkTest` + `UltraLowContrastBenchmarkTest` per-strategy harness, false positive guards
+- Test infrastructure: 6 synthetic generators (whiteOnNearWhite..glossyPaper) + 5 ultra-low-contrast generators (3-unit, 5-unit, noisy, tilted, warm) + 6 line-suppression generators (beigeSurface, groutLines, graySurfaceLowContrast, tileFloor, spanningLinesNoDocs, diagonalSeam). `LowContrastBenchmarkTest` + `UltraLowContrastBenchmarkTest` per-strategy harness, `StrategyBroadeningTest` (8 tests), `LineSuppressionTest` (9 tests), false positive guards. **69/69 instrumented tests pass on S21.**
 
 ### Ultra-Low-Contrast Detection — LSD+Radon Cascade (v1.2.5)
 - `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 21px kernels smooth Sobel Gx/Gy along candidate edge directions, per-pixel max across angles, 90th percentile threshold → binary. ~5 unit detection floor. Position #2 in white-on-white list (after DOG). Hot loop (accumulation + normalize + threshold) runs in native C++ via JNI for ~9.7x speedup over Kotlin/ART; Kotlin fallback when `NativeAccel.isAvailable` is false.
@@ -113,6 +115,14 @@ app/src/main/
   - Tier 3 (joint Radon rectangle fit): full restricted Radon scan, 9 angles [-8..+8 deg], independent H/V peak search, geometric priors. Last resort for <3 unit gradients. +4ms.
 - Gradient density verification: perpendicular Sobel sampling along quad sides (replaces `edgeDensityScore` for LSD path). 3-of-4 sides minimum, reference gradient 20.0.
 - Confidence ranges: Tier 1 [0.50, 0.85], Tier 2 [0.45, 0.75], Tier 3 [0.40, 0.65]
+
+### Edge-Spanning Line Suppression (v1.2.5 WP-D)
+- Problem: tile grout, table seams, counter edges create Canny edges spanning full image dimension. At junction points where these cross document boundary, `findContours` fuses them into composite 8-12 vertex contour that `approxPolyDP` can't collapse to a quad.
+- `suppressSpanningLines(edges, imageSize)` runs between edge production and `analyzeContours()` in `detectWithStrategy()`, applies to all strategies (Canny-based and binary-output).
+- Pipeline: HoughLinesP (threshold=150, minLength=70% of max dim, maxGap=15) → `spansOppositeBorders` filter (both endpoints must reach opposite borders: left↔right or top↔bottom, within 15px margin) → zero-strip (thickness=3) → morph close (5x5 kernel, only when lines suppressed) to heal 3px junction gaps.
+- Zero overhead on grout-free scenes (~0.3ms HoughLinesP returns empty, morph close skipped).
+- `spansOppositeBorders` is critical: original `isNearBorder` (any border) falsely suppressed partial document edges running along a single border.
+- Low-contrast non-white strategy broadening (WP-C) is complementary: DOG helps thresholding (Canny 10/30 vs 100/199), line suppression resolves topology corruption. Neither alone solves the grout-line problem.
 
 ### Confidence Thresholds
 - No corners (empty list): routes to manual corner placement with 10%-inset defaults

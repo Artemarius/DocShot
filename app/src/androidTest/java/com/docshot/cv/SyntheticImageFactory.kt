@@ -600,6 +600,255 @@ object SyntheticImageFactory {
     }
 
     // ----------------------------------------------------------------
+    // Low-contrast non-white / grout line generators (v1.2.5 WP-E)
+    // ----------------------------------------------------------------
+
+    /**
+     * White document on beige surface (~50 unit gradient).
+     * Document RGB(240,240,240) on beige RGB(190,180,160) — warm surface with color tint.
+     * Scene analysis: mean ~200, stddev ~25-30 → isLowContrast but NOT isWhiteOnWhite
+     * (mean borderline ~200, stddev ~25 exceeds the tight <35 check only because
+     * the contrast is moderate). Tests strategy broadening for non-white low-contrast scenes.
+     */
+    fun docOnBeigeSurface(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultA4Corners()
+        // BGR order: B=160, G=180, R=190 → warm beige
+        val bgColor = Scalar(160.0, 180.0, 190.0)
+        val docColor = Scalar(240.0, 240.0, 240.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return Pair(image, corners)
+    }
+
+    /**
+     * White document on tan tile surface with grout lines crossing the document boundary.
+     * THE key regression test — simulates the exact in-field failure scenario.
+     * Document RGB(230,230,230) on tan RGB(160,150,130) with 3H + 3V grout lines
+     * (RGB ~120, 3px wide) spanning the full image including across the document boundary.
+     * Scene analysis: mean ~170, stddev ~30-35 → isLowContrast, not isWhiteOnWhite.
+     * Grout lines fragment document contours → tests line suppression in EdgeDetector.
+     */
+    fun docOnTanSurfaceWithGroutLines(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultA4Corners()
+        // BGR order: B=130, G=150, R=160 → warm tan
+        val bgColor = Scalar(130.0, 150.0, 160.0)
+        val docColor = Scalar(230.0, 230.0, 230.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+
+        // Grout line color: dark gray RGB(120,120,120) → BGR(120,120,120)
+        val groutColor = Scalar(120.0, 120.0, 120.0)
+        val groutThickness = 3
+
+        // 3 horizontal grout lines — evenly spaced, spanning full width
+        val hSpacing = height / 4
+        for (i in 1..3) {
+            val y = i * hSpacing
+            Imgproc.line(
+                image,
+                Point(0.0, y.toDouble()),
+                Point(width.toDouble(), y.toDouble()),
+                groutColor,
+                groutThickness
+            )
+        }
+
+        // 3 vertical grout lines — evenly spaced, spanning full height
+        val vSpacing = width / 4
+        for (i in 1..3) {
+            val x = i * vSpacing
+            Imgproc.line(
+                image,
+                Point(x.toDouble(), 0.0),
+                Point(x.toDouble(), height.toDouble()),
+                groutColor,
+                groutThickness
+            )
+        }
+
+        return Pair(image, corners)
+    }
+
+    /**
+     * Light gray document on medium gray surface (~50 unit gradient, achromatic).
+     * Document RGB(200,200,200) on surface RGB(150,150,150).
+     * Scene analysis: mean ~176, stddev ~25 → isLowContrast (stddev < 40), not isWhiteOnWhite (mean < 180).
+     * Tests DOG effectiveness on non-white, purely grayscale low-contrast scenes.
+     */
+    fun docOnGraySurfaceLowContrast(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultA4Corners()
+        val bgColor = Scalar(150.0, 150.0, 150.0)
+        val docColor = Scalar(200.0, 200.0, 200.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return Pair(image, corners)
+    }
+
+    /**
+     * White document on tile floor pattern with grout grid.
+     * Document RGB(235,235,235) on alternating tile colors (RGB ~180 and ~165)
+     * with grout grid lines (RGB ~100, 2px wide) at ~80px intervals.
+     * Scene analysis: mean ~175, stddev ~30 → isLowContrast, not isWhiteOnWhite.
+     * Tests line suppression with a dense regular grid pattern.
+     */
+    fun docOnTileFloor(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultA4Corners()
+
+        // Base tile pattern: alternating tile colors in a checkerboard
+        val tileSize = 80
+        val tileColor1 = Scalar(180.0, 180.0, 180.0)  // lighter tile
+        val tileColor2 = Scalar(165.0, 165.0, 165.0)  // darker tile
+        val image = Mat(height, width, CvType.CV_8UC3, tileColor1)
+
+        // Fill darker tiles in checkerboard pattern
+        for (tileRow in 0..(height / tileSize)) {
+            for (tileCol in 0..(width / tileSize)) {
+                if ((tileRow + tileCol) % 2 == 1) {
+                    val x1 = tileCol * tileSize
+                    val y1 = tileRow * tileSize
+                    val x2 = minOf(x1 + tileSize, width)
+                    val y2 = minOf(y1 + tileSize, height)
+                    Imgproc.rectangle(
+                        image,
+                        Point(x1.toDouble(), y1.toDouble()),
+                        Point(x2.toDouble(), y2.toDouble()),
+                        tileColor2,
+                        -1  // filled
+                    )
+                }
+            }
+        }
+
+        // Grout grid lines at tile boundaries
+        val groutColor = Scalar(100.0, 100.0, 100.0)
+        val groutThickness = 2
+
+        // Horizontal grout lines
+        for (y in tileSize..height step tileSize) {
+            Imgproc.line(
+                image,
+                Point(0.0, y.toDouble()),
+                Point(width.toDouble(), y.toDouble()),
+                groutColor,
+                groutThickness
+            )
+        }
+
+        // Vertical grout lines
+        for (x in tileSize..width step tileSize) {
+            Imgproc.line(
+                image,
+                Point(x.toDouble(), 0.0),
+                Point(x.toDouble(), height.toDouble()),
+                groutColor,
+                groutThickness
+            )
+        }
+
+        // Draw document on top of tile pattern
+        fillQuad(image, corners, Scalar(235.0, 235.0, 235.0))
+        return Pair(image, corners)
+    }
+
+    /**
+     * NO document — just a surface with spanning lines. FALSE POSITIVE guard.
+     * Surface RGB(170,170,170) with 5 spanning lines (2 horizontal, 3 vertical)
+     * at various intensities (100-140) and widths (2-3px).
+     * Scene analysis: mean ~165, stddev ~15.
+     * No document should be detected — lines alone must not form a quad.
+     */
+    fun spanningLinesNoDocs(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Mat {
+        val bgColor = Scalar(170.0, 170.0, 170.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+
+        // 2 horizontal spanning lines
+        Imgproc.line(
+            image,
+            Point(0.0, 180.0),
+            Point(width.toDouble(), 180.0),
+            Scalar(100.0, 100.0, 100.0),
+            3
+        )
+        Imgproc.line(
+            image,
+            Point(0.0, 420.0),
+            Point(width.toDouble(), 420.0),
+            Scalar(130.0, 130.0, 130.0),
+            2
+        )
+
+        // 3 vertical spanning lines
+        Imgproc.line(
+            image,
+            Point(200.0, 0.0),
+            Point(200.0, height.toDouble()),
+            Scalar(110.0, 110.0, 110.0),
+            2
+        )
+        Imgproc.line(
+            image,
+            Point(450.0, 0.0),
+            Point(450.0, height.toDouble()),
+            Scalar(140.0, 140.0, 140.0),
+            3
+        )
+        Imgproc.line(
+            image,
+            Point(650.0, 0.0),
+            Point(650.0, height.toDouble()),
+            Scalar(120.0, 120.0, 120.0),
+            2
+        )
+
+        return image
+    }
+
+    /**
+     * White document on medium surface with one diagonal seam/crease line.
+     * Document RGB(235,235,235) on surface RGB(155,155,155) with a diagonal seam
+     * (RGB ~110, 3px wide) running from top-left to bottom-right of the image.
+     * Scene analysis: mean ~180, stddev ~30.
+     * Tests that diagonal spanning lines are suppressed without affecting document detection.
+     */
+    fun docWithDiagonalSeam(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultA4Corners()
+        val bgColor = Scalar(155.0, 155.0, 155.0)
+        val docColor = Scalar(235.0, 235.0, 235.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+
+        // Diagonal seam from top-left corner to bottom-right corner of the image
+        // (not aligned with document edges)
+        Imgproc.line(
+            image,
+            Point(0.0, 0.0),
+            Point(width.toDouble(), height.toDouble()),
+            Scalar(110.0, 110.0, 110.0),
+            3
+        )
+
+        return Pair(image, corners)
+    }
+
+    // ----------------------------------------------------------------
     // False positive guard generators (no document present)
     // ----------------------------------------------------------------
 

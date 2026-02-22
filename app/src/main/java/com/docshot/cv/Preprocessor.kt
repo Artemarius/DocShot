@@ -146,7 +146,7 @@ fun preprocessWithStrategy(
  * `sharedGray` to avoid redundant grayscale conversion.
  *
  * Strategy selection logic:
- * - Low light (mean < 80) or low contrast (stddev < 30): try CLAHE first
+ * - Low light (mean < 80) or low contrast (stddev < 40): try CLAHE + DOG first
  * - Color input (3+ channels): include SATURATION_CHANNEL
  * - Always include STANDARD as baseline
  * - BILATERAL and HEAVY_MORPH as last resorts
@@ -191,7 +191,9 @@ fun analyzeScene(input: Mat, useCache: Boolean = true): SceneAnalysis {
     stddev.release()
 
     val isLowLight = meanVal < 80.0
-    val isLowContrast = stddevVal < 30.0
+    // stddev < 40 covers mid-tone low-contrast scenes (mean 120-180) that benefit
+    // from advanced strategies but don't trigger isWhiteOnWhite (mean > 180).
+    val isLowContrast = stddevVal < 40.0
     // White-on-white: both surfaces uniformly bright, subtle boundary gradients.
     // Auto-Canny thresholds saturate (0.67*220 ≈ 147), missing 5-15 unit edges.
     val isWhiteOnWhite = meanVal > 180.0 && stddevVal < 35.0
@@ -222,13 +224,22 @@ fun analyzeScene(input: Mat, useCache: Boolean = true): SceneAnalysis {
         // Low light or low contrast → CLAHE is most likely to help, try it first
         if (isLowLight || isLowContrast) {
             strategies.add(PreprocessStrategy.CLAHE_ENHANCED)
+            // DOG isolates edge-scale features via bandpass filtering — effective
+            // for low-contrast scenes where auto-Canny thresholds are borderline.
+            strategies.add(PreprocessStrategy.DOG)
         }
 
         // Always try standard
         strategies.add(PreprocessStrategy.STANDARD)
 
+        if (isLowContrast) {
+            // Gradient magnitude thresholds at relative 95th percentile — captures
+            // the strongest local gradient regardless of absolute intensity.
+            strategies.add(PreprocessStrategy.GRADIENT_MAGNITUDE)
+        }
+
         // CLAHE as fallback when not already prioritized: scenes with moderate
-        // contrast (stddev 30-60) may have document/background differences that
+        // contrast (stddev 40-60) may have document/background differences that
         // are too subtle for auto-Canny after Gaussian blur. CLAHE + lower
         // thresholds catches these cases. Short-circuit prevents wasted work
         // when STANDARD already succeeds.
@@ -247,8 +258,8 @@ fun analyzeScene(input: Mat, useCache: Boolean = true): SceneAnalysis {
     }
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
-    Log.d(TAG, "analyzeScene: %.1f ms (mean=%.0f, stddev=%.0f, whiteOnWhite=%s) -> %s".format(
-        ms, meanVal, stddevVal, isWhiteOnWhite, strategies))
+    Log.d(TAG, "analyzeScene: %.1f ms (mean=%.0f, stddev=%.0f, lowContrast=%s, whiteOnWhite=%s) -> %s".format(
+        ms, meanVal, stddevVal, isLowContrast, isWhiteOnWhite, strategies))
 
     val result = SceneAnalysis(
         meanIntensity = meanVal,

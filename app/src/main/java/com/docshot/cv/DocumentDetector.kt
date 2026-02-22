@@ -242,6 +242,15 @@ internal fun detectWithStrategy(
             preprocessed = null
         }
 
+        // Suppress image-spanning lines (tile grout, table seams) that fuse with
+        // document edges in findContours, producing 8-12 vertex composite contours
+        // instead of clean 4-point quads. Must run after edge production but before
+        // contour analysis.
+        val suppressedLineCount = suppressSpanningLines(edges, imageSize)
+        if (suppressedLineCount > 0) {
+            Log.d(TAG, "detectWithStrategy($strategy): suppressed $suppressedLineCount spanning line(s)")
+        }
+
         val contourAnalysis = analyzeContours(edges, imageSize)
         val quads = contourAnalysis.quads
 
