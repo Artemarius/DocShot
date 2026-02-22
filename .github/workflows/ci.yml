@@ -42,6 +42,9 @@ jobs:
           unzip -q /tmp/opencv.zip -d ~/opencv-android-sdk
           rm /tmp/opencv.zip
 
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Build debug APK
         env:
           OPENCV_ANDROID_SDK: ~/opencv-android-sdk/OpenCV-android-sdk
