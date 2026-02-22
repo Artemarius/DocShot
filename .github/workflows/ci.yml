@@ -46,11 +46,11 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build debug APK
-        env:
-          OPENCV_ANDROID_SDK: ~/opencv-android-sdk/OpenCV-android-sdk
-        run: ./gradlew assembleDebug --no-daemon
+        run: |
+          export OPENCV_ANDROID_SDK="$HOME/opencv-android-sdk/OpenCV-android-sdk"
+          ./gradlew assembleDebug --no-daemon
 
       - name: Run unit tests
-        env:
-          OPENCV_ANDROID_SDK: ~/opencv-android-sdk/OpenCV-android-sdk
-        run: ./gradlew testDebugUnitTest --no-daemon
+        run: |
+          export OPENCV_ANDROID_SDK="$HOME/opencv-android-sdk/OpenCV-android-sdk"
+          ./gradlew testDebugUnitTest --no-daemon
