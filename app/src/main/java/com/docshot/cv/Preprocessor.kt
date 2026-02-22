@@ -7,6 +7,9 @@ import org.opencv.core.Mat
 import org.opencv.core.MatOfDouble
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 private const val TAG = "DocShot:Preprocess"
 
@@ -51,11 +54,20 @@ enum class PreprocessStrategy {
     DOG,
 
     /** Per-channel Canny (20/50) + bitwise OR. Binary output — bypasses Canny. Expensive (~8-12ms). */
-    MULTICHANNEL_FUSION;
+    MULTICHANNEL_FUSION,
+
+    /**
+     * Directional gradient smoothing: Sobel Gx/Gy smoothed along 5 tilted 1D kernels
+     * ([-10, -5, 0, +5, +10] degrees) to accumulate coherent edge gradients while
+     * cancelling random noise/texture. Binary output — bypasses Canny.
+     * Targets ultra-low-contrast white-on-white scenes (gradients down to ~3 units).
+     */
+    DIRECTIONAL_GRADIENT;
 
     /** True if this strategy produces a binary (0/255) edge map that bypasses Canny in the detector. */
     val isBinaryOutput: Boolean
-        get() = this == ADAPTIVE_THRESHOLD || this == GRADIENT_MAGNITUDE || this == MULTICHANNEL_FUSION
+        get() = this == ADAPTIVE_THRESHOLD || this == GRADIENT_MAGNITUDE
+                || this == MULTICHANNEL_FUSION || this == DIRECTIONAL_GRADIENT
 }
 
 /**
@@ -116,6 +128,7 @@ fun preprocessWithStrategy(
         PreprocessStrategy.GRADIENT_MAGNITUDE -> preprocessGradientMagnitude(input, pool, sharedGray)
         PreprocessStrategy.DOG -> preprocessDoG(input, pool, sharedGray)
         PreprocessStrategy.MULTICHANNEL_FUSION -> preprocessMultichannelFusion(input)
+        PreprocessStrategy.DIRECTIONAL_GRADIENT -> preprocessDirectionalGradient(input, pool, sharedGray)
     }
 
     val ms = (System.nanoTime() - start) / 1_000_000.0
@@ -196,7 +209,9 @@ fun analyzeScene(input: Mat, useCache: Boolean = true): SceneAnalysis {
         //   CLAHE_ENHANCED:  6/6 detected, 2.8-7.0ms  (existing fallback)
         //   MULTI_FUSION:    5/6 detected, 2.6-4.5ms  (missed textured)
         //   ADAPTIVE_THRESH: 3/6 detected, 7.6-10.8ms (missed <=20 gradient)
+        //   DIRECTIONAL_GRADIENT: TBD (v1.2.5, targets ~3 unit gradients)
         strategies.add(PreprocessStrategy.DOG)
+        strategies.add(PreprocessStrategy.DIRECTIONAL_GRADIENT)
         strategies.add(PreprocessStrategy.GRADIENT_MAGNITUDE)
         strategies.add(PreprocessStrategy.LAB_CLAHE)
         strategies.add(PreprocessStrategy.CLAHE_ENHANCED) // existing, reliable fallback
@@ -605,4 +620,224 @@ private fun preprocessMultichannelFusion(input: Mat): Mat {
     Imgproc.morphologyEx(combined!!, combined, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
 
     return combined
+}
+
+// ----------------------------------------------------------------
+// Directional gradient smoothing (v1.2.5)
+// ----------------------------------------------------------------
+
+/**
+ * Tilt angles (degrees) for directional gradient smoothing kernels.
+ * +-10 degrees covers typical camera-to-document alignment with <0.2dB worst-case loss.
+ * 5 angles x 2 directions (H/V) = 10 filter2D calls total.
+ */
+private val TILT_ANGLES_DEG = doubleArrayOf(-10.0, -5.0, 0.0, 5.0, 10.0)
+
+/** Length of the 1D smoothing kernel in pixels. 21px at 640x480 ≈ 3.3% of width. */
+private const val KERNEL_LENGTH = 21
+
+/**
+ * Cached tilted kernels for horizontal edge detection (applied to |Gy|).
+ * Each kernel is a 2D Mat where non-zero elements follow a line tilted at the
+ * corresponding angle from horizontal, normalized to sum to 1.
+ * Lazy initialization — created once, reused across all frames.
+ */
+private val horizontalKernels: Array<Mat> by lazy {
+    Array(TILT_ANGLES_DEG.size) { i ->
+        createTiltedKernel(angleDeg = TILT_ANGLES_DEG[i], isHorizontal = true)
+    }
+}
+
+/**
+ * Cached tilted kernels for vertical edge detection (applied to |Gx|).
+ * Each kernel is the transpose of the horizontal kernel at the same angle.
+ */
+private val verticalKernels: Array<Mat> by lazy {
+    Array(TILT_ANGLES_DEG.size) { i ->
+        createTiltedKernel(angleDeg = TILT_ANGLES_DEG[i], isHorizontal = false)
+    }
+}
+
+/**
+ * Creates a tilted 1D averaging kernel as a 2D Mat.
+ *
+ * For horizontal smoothing (detecting horizontal edges via |Gy|): the base direction
+ * is along the X axis, tilted by [angleDeg]. The kernel Mat is sized to fit the
+ * rotated line, with non-zero elements along the tilted line, each = 1/KERNEL_LENGTH.
+ *
+ * For vertical smoothing (detecting vertical edges via |Gx|): same but the base
+ * direction is along the Y axis.
+ *
+ * The kernel is a sparse 2D Mat where only pixels along the tilted line are non-zero.
+ * Using Bresenham-style integer rounding to place kernel elements on the grid.
+ */
+private fun createTiltedKernel(angleDeg: Double, isHorizontal: Boolean): Mat {
+    val angleRad = Math.toRadians(angleDeg)
+
+    // Direction vector for the kernel line
+    val dx: Double
+    val dy: Double
+    if (isHorizontal) {
+        // Base direction horizontal (1, 0), tilted by angleDeg
+        dx = cos(angleRad)
+        dy = sin(angleRad)
+    } else {
+        // Base direction vertical (0, 1), tilted by angleDeg
+        dx = -sin(angleRad)
+        dy = cos(angleRad)
+    }
+
+    // Compute all sample positions centered at origin
+    val halfLen = KERNEL_LENGTH / 2
+    val positions = Array(KERNEL_LENGTH) { i ->
+        val t = (i - halfLen).toDouble()
+        Pair((t * dx).roundToInt(), (t * dy).roundToInt())
+    }
+
+    // Find bounding box
+    val minX = positions.minOf { it.first }
+    val maxX = positions.maxOf { it.first }
+    val minY = positions.minOf { it.second }
+    val maxY = positions.maxOf { it.second }
+
+    val kernelWidth = maxX - minX + 1
+    val kernelHeight = maxY - minY + 1
+
+    // Create kernel Mat (CV_32F) initialized to zero
+    val kernel = Mat.zeros(kernelHeight, kernelWidth, CvType.CV_32F)
+    val weight = 1.0f / KERNEL_LENGTH
+
+    // Place kernel elements along the tilted line
+    for ((px, py) in positions) {
+        val col = px - minX
+        val row = py - minY
+        kernel.put(row, col, floatArrayOf(weight))
+    }
+
+    return kernel
+}
+
+/**
+ * Directional gradient smoothing for ultra-low-contrast white-on-white scenes.
+ *
+ * Smooths Sobel |Gy| along near-horizontal directions and |Gx| along near-vertical
+ * directions using 5 tilted 1D kernels at [-10, -5, 0, +5, +10] degrees.
+ * Coherent edge gradients accumulate (5x SNR improvement for a perfectly aligned edge)
+ * while random noise and texture cancel. Mathematically equivalent to a local
+ * restricted Radon transform.
+ *
+ * Returns a binary edge image (0/255) — bypasses Canny in the detector.
+ *
+ * Pipeline:
+ * 1. Pre-blur (5x5 Gaussian, sigma=1.4) to widen gradient response
+ * 2. Sobel Gx and Gy (CV_16S, ksize=3) → absolute values (CV_8U)
+ * 3. For each of 5 tilt angles:
+ *    - filter2D |Gy| with tilted horizontal kernel → horizontal edge response
+ *    - filter2D |Gx| with tilted vertical kernel → vertical edge response
+ * 4. Per-pixel max across 5 angles for H and V separately
+ * 5. Combined response = max(H, V)
+ * 6. Normalize to 0-255, threshold at 90th percentile
+ * 7. Morphological close (3x3) to connect nearby edge fragments
+ */
+private fun preprocessDirectionalGradient(input: Mat, pool: MatPool? = null, sharedGray: Mat? = null): Mat {
+    val gray = toGray(input, pool, sharedGray)
+
+    // Step 1: Pre-blur to widen gradient response, improving tilt tolerance.
+    // sigma=1.4 matches 5x5 kernel's natural sigma; larger would blur away the
+    // subtle gradients we're trying to detect.
+    val blurred = Mat()
+    Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 1.4)
+    gray.release()
+
+    // Step 2: Sobel gradients in CV_16S (signed, avoids clipping at 255)
+    val gradX16 = Mat()
+    val gradY16 = Mat()
+    Imgproc.Sobel(blurred, gradX16, CvType.CV_16S, 1, 0, /* ksize= */ 3)
+    Imgproc.Sobel(blurred, gradY16, CvType.CV_16S, 0, 1, /* ksize= */ 3)
+    blurred.release()
+
+    // Convert to absolute values in CV_8U for filter2D input
+    val absGx = Mat()
+    val absGy = Mat()
+    Core.convertScaleAbs(gradX16, absGx)
+    Core.convertScaleAbs(gradY16, absGy)
+    gradX16.release()
+    gradY16.release()
+
+    // Step 3-4: Apply tilted kernels and compute per-pixel max across angles.
+    // H response: smooth |Gy| along near-horizontal directions (detects horizontal edges)
+    // V response: smooth |Gx| along near-vertical directions (detects vertical edges)
+    var hResponse: Mat? = null
+    var vResponse: Mat? = null
+    val tempH = Mat()
+    val tempV = Mat()
+
+    try {
+        for (i in TILT_ANGLES_DEG.indices) {
+            // Horizontal edge response: filter |Gy| with tilted horizontal kernel
+            Imgproc.filter2D(absGy, tempH, CvType.CV_8U, horizontalKernels[i])
+            if (hResponse == null) {
+                hResponse = tempH.clone()
+            } else {
+                Core.max(hResponse, tempH, hResponse)
+            }
+
+            // Vertical edge response: filter |Gx| with tilted vertical kernel
+            Imgproc.filter2D(absGx, tempV, CvType.CV_8U, verticalKernels[i])
+            if (vResponse == null) {
+                vResponse = tempV.clone()
+            } else {
+                Core.max(vResponse, tempV, vResponse)
+            }
+        }
+    } finally {
+        tempH.release()
+        tempV.release()
+        absGx.release()
+        absGy.release()
+    }
+
+    // Step 5: Combine H and V responses — max captures both edge orientations
+    val combined = Mat()
+    Core.max(hResponse!!, vResponse!!, combined)
+    hResponse.release()
+    vResponse.release()
+
+    // Step 6: Normalize to 0-255 range, then threshold at 90th percentile.
+    // Normalization ensures the threshold percentile is meaningful regardless
+    // of absolute gradient magnitudes (which vary with scene contrast).
+    Core.normalize(combined, combined, 0.0, 255.0, Core.NORM_MINMAX)
+    combined.convertTo(combined, CvType.CV_8UC1)
+
+    // Find 90th percentile via histogram (O(n) scan, no sorting needed).
+    // 90th percentile keeps the top 10% of gradient accumulations — document
+    // boundary edges after directional smoothing are well above this.
+    val data = ByteArray(combined.total().toInt() * combined.channels())
+    combined.get(0, 0, data)
+
+    val histogram = IntArray(256)
+    for (b in data) {
+        histogram[b.toInt() and 0xFF]++
+    }
+
+    val totalPixels = data.size
+    val target = (totalPixels * 0.90).toInt()
+    var cumSum = 0
+    var thresholdVal = 255
+    for (i in 0 until 256) {
+        cumSum += histogram[i]
+        if (cumSum >= target) {
+            thresholdVal = i
+            break
+        }
+    }
+
+    val binary = Mat()
+    Imgproc.threshold(combined, binary, thresholdVal.toDouble(), 255.0, Imgproc.THRESH_BINARY)
+    combined.release()
+
+    // Step 7: Morph close (3x3) to connect nearby edge fragments into continuous contours
+    Imgproc.morphologyEx(binary, binary, Imgproc.MORPH_CLOSE, preprocessMorphKernel3x3)
+
+    return binary
 }

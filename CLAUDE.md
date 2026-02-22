@@ -42,23 +42,27 @@ Android document rectification app. Camera input -> automatic document boundary 
 - Corner ordering: consistent TL, TR, BR, BL based on sum/difference of coordinates
 - Output dimensions: derive from longest edge pairs to preserve document aspect ratio
 - Always use `Imgproc.INTER_CUBIC` for the final warp, `INTER_LINEAR` for preview
-- 10 preprocessing strategies: 5 original (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) + 5 low-contrast (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene analysis, white-on-white detection, and 25ms time budget
+- 11 preprocessing strategies: 5 original (STANDARD, CLAHE_ENHANCED, SATURATION_CHANNEL, BILATERAL, HEAVY_MORPH) + 6 low-contrast (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION, DIRECTIONAL_GRADIENT) with scene analysis, white-on-white detection, and 25ms time budget + LSD+Radon cascade fallback
 
 ## File Structure
 ```
 app/src/main/java/com/docshot/
 ├── ui/          # Compose screens + navigation
 ├── camera/      # CameraX setup, frame analysis, QuadSmoother, CornerTracker
-├── cv/          # Document detection, rectification, post-processing
+├── cv/          # Document detection, rectification, post-processing, LSD+Radon detector
 └── util/        # Permissions, image I/O, gallery save, DataStore prefs
 ```
 
-## Current State (v1.2.4)
+## Current State (v1.2.5-dev)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
 - **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
-- **Next:** v1.2.5 ultra-low-contrast detection — `DIRECTIONAL_GRADIENT` strategy (5-angle tilted gradient smoothing) + LSD+Radon cascade (bypasses Canny/contours entirely). Target: detect gradients down to ~3 units. See [PROJECT.md](PROJECT.md) and [docs/LOW_CONTRAST_RESEARCH.md](docs/LOW_CONTRAST_RESEARCH.md).
+- **v1.2.5 implementation complete, awaiting on-device validation.** Ultra-low-contrast detection — two new detection paths for gradients down to ~3 units:
+  - `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 1D kernel smoothing of Sobel gradients, 90th percentile threshold, binary output. Position #2 in white-on-white strategy list after DOG.
+  - `LsdRadonDetector`: entirely new detection path bypassing Canny/contours. Three-tier cascade: LSD segment detection (quant=1.0, ~2.6 unit threshold) → corner-constrained Radon → joint Radon rectangle fit. Invoked as fallback after strategy loop for white-on-white scenes.
+  - Test infrastructure: 5 ultra-low-contrast synthetic generators (3-unit, 5-unit, noisy, tilted, warm), `UltraLowContrastBenchmarkTest`, `LsdRadonBenchmarkTest` (7 test methods including false positive guards).
+  - **Next:** On-device S21 benchmarks + real-world validation (A3, A4, B9).
 
 ## Key Architecture Details (for current work)
 
@@ -90,10 +94,19 @@ app/src/main/java/com/docshot/
   4. `CLAHE_ENHANCED`: existing strategy, reliable fallback. 6/6 detected.
   5. `MULTICHANNEL_FUSION`: Per-channel Canny(20/50) + bitwise OR. Captures color differences invisible in grayscale. 5/6 detected. Binary output bypasses Canny.
   6. `ADAPTIVE_THRESHOLD`: blockSize=51, C=5 → binary segmentation → morph gradient → edge image. 3/6 detected, last resort.
-- `PreprocessStrategy.isBinaryOutput`: ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE, MULTICHANNEL_FUSION bypass Canny in `detectWithStrategy()` — preprocessed output is the edge map
+- `PreprocessStrategy.isBinaryOutput`: ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE, MULTICHANNEL_FUSION, DIRECTIONAL_GRADIENT bypass Canny in `detectWithStrategy()` — preprocessed output is the edge map
 - Non-white-on-white scenes keep existing 5-strategy pipeline — zero performance regression
 - Pipeline efficiency: DOG short-circuits on first attempt (~3ms) vs old pipeline STANDARD(fail, ~8ms) → CLAHE(~5ms) = ~13ms. ~4x faster for white-on-white.
-- Test infrastructure: 6 synthetic generators (whiteOnNearWhite..glossyPaper), `LowContrastBenchmarkTest` per-strategy harness, false positive guards (gradient-only, noisy-only)
+- Test infrastructure: 6 synthetic generators (whiteOnNearWhite..glossyPaper) + 5 ultra-low-contrast generators (3-unit, 5-unit, noisy, tilted, warm), `LowContrastBenchmarkTest` + `UltraLowContrastBenchmarkTest` per-strategy harness, false positive guards
+
+### Ultra-Low-Contrast Detection — LSD+Radon Cascade (v1.2.5)
+- `DIRECTIONAL_GRADIENT` strategy: 5-angle tilted 21px kernels smooth Sobel Gx/Gy along candidate edge directions, per-pixel max across angles, 90th percentile threshold → binary. ~5 unit detection floor. Position #2 in white-on-white list (after DOG).
+- `LsdRadonDetector`: separate detection path (not a PreprocessStrategy), invoked as fallback after strategy loop exhaustion for white-on-white scenes only. Runs outside 25ms time budget (~10ms worst case).
+  - Tier 1 (LSD fast path): `createLineSegmentDetector(quant=1.0)` → segment clustering (8deg/15px tolerance) → 2H×2V rectangle formation. ~2.6 unit detection floor, ~2.5ms.
+  - Tier 2 (corner-constrained Radon): rescues 2-3 edge partial detections via coarse-to-fine restricted Radon search (perpendicular gradient only, ±12deg). +2ms.
+  - Tier 3 (joint Radon rectangle fit): full restricted Radon scan, 9 angles [-8..+8 deg], independent H/V peak search, geometric priors. Last resort for <3 unit gradients. +4ms.
+- Gradient density verification: perpendicular Sobel sampling along quad sides (replaces `edgeDensityScore` for LSD path). 3-of-4 sides minimum, reference gradient 20.0.
+- Confidence ranges: Tier 1 [0.50, 0.85], Tier 2 [0.45, 0.75], Tier 3 [0.40, 0.65]
 
 ### Confidence Thresholds
 - No corners (empty list): routes to manual corner placement with 10%-inset defaults

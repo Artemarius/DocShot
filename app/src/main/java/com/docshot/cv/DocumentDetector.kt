@@ -120,6 +120,51 @@ fun detectDocumentWithStatus(input: Mat): DetectionStatus {
                 }
             }
         }
+
+        // LSD+Radon cascade fallback for white-on-white scenes.
+        // Normal scenes have enough contrast for Canny-based strategies above;
+        // LSD operates on the raw gradient field and can detect boundaries down to
+        // ~3 intensity units where Canny thresholds saturate.
+        // Runs outside the 25ms strategy time budget — worst case ~10ms, total ~35ms
+        // for pathological white-on-white scenes (acceptable per roadmap).
+        if (bestResult == null && sceneAnalysis.isWhiteOnWhite) {
+            // Reuse the shared grayscale Mat if available; otherwise convert input.
+            // sharedGray may be null when scene analysis was served from cache.
+            var lsdGray: Mat? = null
+            val gray = if (sharedGray != null) {
+                sharedGray
+            } else {
+                val g = Mat()
+                val code = if (input.channels() == 4) {
+                    Imgproc.COLOR_RGBA2GRAY
+                } else if (input.channels() == 3) {
+                    Imgproc.COLOR_BGR2GRAY
+                } else {
+                    -1 // input is already single-channel
+                }
+                if (code >= 0) {
+                    Imgproc.cvtColor(input, g, code)
+                    lsdGray = g
+                    g
+                } else {
+                    g.release()
+                    input // already grayscale
+                }
+            }
+            try {
+                val lsdResult = detectDocumentLsd(
+                    gray = gray,
+                    imageWidth = input.cols(),
+                    imageHeight = input.rows()
+                )
+                Log.d(TAG, "LSD cascade fallback: ${if (lsdResult != null) "detected" else "no detection"}")
+                if (lsdResult != null) {
+                    bestResult = lsdResult
+                }
+            } finally {
+                lsdGray?.release()
+            }
+        }
     } finally {
         // Release the shared gray Mat from analyzeScene
         sharedGray?.release()
@@ -173,8 +218,8 @@ internal fun detectWithStrategy(
 
         if (strategy.isBinaryOutput) {
             // Binary-output strategies (ADAPTIVE_THRESHOLD, GRADIENT_MAGNITUDE,
-            // MULTICHANNEL_FUSION) already produce edge maps — skip Canny.
-            // Transfer ownership: preprocessed becomes edges.
+            // MULTICHANNEL_FUSION, DIRECTIONAL_GRADIENT) already produce edge maps
+            // — skip Canny. Transfer ownership: preprocessed becomes edges.
             edges = preprocessed
             preprocessed = null
         } else {

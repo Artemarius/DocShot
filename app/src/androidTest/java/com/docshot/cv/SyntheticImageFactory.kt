@@ -464,6 +464,142 @@ object SyntheticImageFactory {
     }
 
     // ----------------------------------------------------------------
+    // Ultra-low-contrast generators (v1.2.5 — 3-unit and 5-unit gradients)
+    // ----------------------------------------------------------------
+
+    /** Centered document covering ~65% of image area — used by ultra-low-contrast generators. */
+    fun defaultUltraLowContrastCorners(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): List<Point> {
+        // ~65% area: 80% of each dimension, centered
+        val marginX = width * 0.10
+        val marginY = height * 0.10
+        return listOf(
+            Point(marginX, marginY),                               // TL
+            Point(width - marginX, marginY),                       // TR
+            Point(width - marginX, height - marginY),              // BR
+            Point(marginX, height - marginY)                       // BL
+        )
+    }
+
+    /**
+     * Ultra-low-contrast: only 3 units of gradient at the boundary.
+     * Document RGB(230,230,230) on background RGB(233,233,233).
+     * Theoretical floor for LSD (quant=1.0) detection. Pure signal — no texture, no noise.
+     * Scene analysis: mean ~232, stddev ~1.3 → white-on-white (mean>180, stddev<35).
+     */
+    fun ultraLowContrast3Unit(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultUltraLowContrastCorners(width = width, height = height)
+        val bgColor = Scalar(233.0, 233.0, 233.0)
+        val docColor = Scalar(230.0, 230.0, 230.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return Pair(image, corners)
+    }
+
+    /**
+     * Ultra-low-contrast: 5 units of gradient at the boundary.
+     * Document RGB(225,225,225) on background RGB(230,230,230).
+     * Should be detectable by DIRECTIONAL_GRADIENT strategy.
+     * Scene analysis: mean ~228, stddev ~2.2 → white-on-white.
+     */
+    fun ultraLowContrast5Unit(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultUltraLowContrastCorners(width = width, height = height)
+        val bgColor = Scalar(230.0, 230.0, 230.0)
+        val docColor = Scalar(225.0, 225.0, 225.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return Pair(image, corners)
+    }
+
+    /**
+     * Ultra-low-contrast: 5-unit gradient with Gaussian noise (stddev=3).
+     * Tests whether directional smoothing can recover signal from noise.
+     * SNR ~1.7 per pixel, ~7.7 after 21-pixel directional averaging.
+     * Scene analysis: mean ~228, stddev ~3.5 → white-on-white.
+     */
+    fun ultraLowContrast5UnitNoisy(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val (cleanImage, corners) = ultraLowContrast5Unit(width = width, height = height)
+        val noisyImage = addNoise(cleanImage, stddev = 3.0)
+        cleanImage.release()
+        return Pair(noisyImage, corners)
+    }
+
+    /**
+     * Ultra-low-contrast: 5-unit gradient document tilted ~8 degrees.
+     * Tests angle tolerance of DIRECTIONAL_GRADIENT (5-deg spacing, ±12.5 deg coverage)
+     * and LSD (ang_th=22.5 deg). Corners computed via rotation about image center.
+     * Scene analysis: mean ~228, stddev ~2.2 → white-on-white.
+     */
+    fun ultraLowContrastTilted8deg(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val bgColor = Scalar(230.0, 230.0, 230.0)
+        val docColor = Scalar(225.0, 225.0, 225.0)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+
+        // Compute axis-aligned document corners (~65% area, centered)
+        val marginX = width * 0.15
+        val marginY = height * 0.15
+        val axisCorners = listOf(
+            Point(marginX, marginY),
+            Point(width - marginX, marginY),
+            Point(width - marginX, height - marginY),
+            Point(marginX, height - marginY)
+        )
+
+        // Rotate each corner ~8 degrees about image center
+        val cx = width / 2.0
+        val cy = height / 2.0
+        val angleRad = Math.toRadians(8.0)
+        val cosA = Math.cos(angleRad)
+        val sinA = Math.sin(angleRad)
+
+        val rotatedCorners = axisCorners.map { p ->
+            val dx = p.x - cx
+            val dy = p.y - cy
+            Point(
+                cx + dx * cosA - dy * sinA,
+                cy + dx * sinA + dy * cosA
+            )
+        }
+
+        fillQuad(image, rotatedCorners, docColor)
+        return Pair(image, rotatedCorners)
+    }
+
+    /**
+     * Ultra-low-contrast: 3-unit gradient with warm color difference.
+     * Document RGB(230,228,225) on background RGB(233,231,228) (BGR order: 225,228,230 / 228,231,233).
+     * Per-channel gradient is ~3 units but with slight warm/cool tone difference.
+     * Tests whether multichannel approaches gain any advantage over grayscale.
+     * Scene analysis: mean ~230, stddev ~2.2 → white-on-white.
+     */
+    fun ultraLowContrast3UnitWarm(
+        width: Int = DEFAULT_WIDTH,
+        height: Int = DEFAULT_HEIGHT
+    ): Pair<Mat, List<Point>> {
+        val corners = defaultUltraLowContrastCorners(width = width, height = height)
+        // BGR order: B, G, R — warm means more red, less blue
+        val bgColor = Scalar(228.0, 231.0, 233.0)   // RGB(233,231,228)
+        val docColor = Scalar(225.0, 228.0, 230.0)   // RGB(230,228,225)
+        val image = Mat(height, width, CvType.CV_8UC3, bgColor)
+        fillQuad(image, corners, docColor)
+        return Pair(image, corners)
+    }
+
+    // ----------------------------------------------------------------
     // False positive guard generators (no document present)
     // ----------------------------------------------------------------
 
