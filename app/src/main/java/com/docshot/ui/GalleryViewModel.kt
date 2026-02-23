@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
 import com.docshot.cv.detectDocument
 import com.docshot.cv.estimateAspectRatio
 import com.docshot.cv.rectify
@@ -42,12 +43,6 @@ sealed class GalleryUiState {
     data object Idle : GalleryUiState()
     data object Loading : GalleryUiState()
 
-    data class Detected(
-        val bitmap: Bitmap,
-        val corners: List<Point>,
-        val detectionMs: Double
-    ) : GalleryUiState()
-
     data class ManualAdjust(
         val bitmap: Bitmap,
         val corners: List<Point>
@@ -61,6 +56,12 @@ sealed class GalleryUiState {
 }
 
 class GalleryViewModel : ViewModel() {
+
+    companion object {
+        private const val RESULT_CACHE_DIR = "gallery_result_cache"
+        private const val RESULT_CACHE_FILE = "gallery_result.jpg"
+        private const val ORIGINAL_CACHE_FILE = "gallery_original.jpg"
+    }
 
     private val _state = MutableStateFlow<GalleryUiState>(GalleryUiState.Idle)
     val state: StateFlow<GalleryUiState> = _state
@@ -104,13 +105,13 @@ class GalleryViewModel : ViewModel() {
                     val fullResCorners = detection.corners.map { pt ->
                         Point(pt.x * scaleFactor, pt.y * scaleFactor)
                     }
-                    _state.value = GalleryUiState.Detected(
+                    // Always go to corner adjustment — lets user verify/fix detection
+                    _state.value = GalleryUiState.ManualAdjust(
                         bitmap = bitmap,
-                        corners = fullResCorners,
-                        detectionMs = detection.detectionMs
+                        corners = fullResCorners
                     )
                 } else {
-                    // Auto-detection failed — go to manual adjustment with default corners
+                    // Auto-detection failed — manual adjustment with default corners
                     val defaultCorners = defaultCorners(bitmap.width, bitmap.height)
                     _state.value = GalleryUiState.ManualAdjust(
                         bitmap = bitmap,
@@ -125,21 +126,6 @@ class GalleryViewModel : ViewModel() {
                 resetAfterDelay()
             }
         }
-    }
-
-    fun acceptDetection() {
-        val current = _state.value
-        if (current !is GalleryUiState.Detected) return
-        rectifyWithCorners(current.bitmap, current.corners)
-    }
-
-    fun enterManualAdjust() {
-        val current = _state.value
-        if (current !is GalleryUiState.Detected) return
-        _state.value = GalleryUiState.ManualAdjust(
-            bitmap = current.bitmap,
-            corners = current.corners
-        )
     }
 
     fun updateCorner(index: Int, point: Point) {
@@ -158,22 +144,21 @@ class GalleryViewModel : ViewModel() {
         rectifyWithCorners(current.bitmap, current.corners)
     }
 
-    fun saveResult(context: Context, onResult: (Boolean) -> Unit) {
-        val current = _state.value
-        if (current !is GalleryUiState.Result) return
-
+    /** Saves the displayed bitmap (with WB + filter applied) to the device gallery. */
+    fun saveResult(context: Context, bitmap: Bitmap, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val displayName = "DocShot_$timestamp"
-            val uri = saveBitmapToGallery(context, current.data.rectifiedBitmap, displayName)
+            val uri = saveBitmapToGallery(context, bitmap, displayName)
             onResult(uri != null)
         }
     }
 
-    fun shareResult(context: Context) {
-        val current = _state.value
-        if (current !is GalleryUiState.Result) return
-        shareImage(context, current.data.rectifiedBitmap)
+    /** Shares the displayed bitmap (with WB + filter applied) via the system share sheet. */
+    fun shareResult(context: Context, bitmap: Bitmap) {
+        if (_state.value !is GalleryUiState.Result) return
+        cacheResultForRestore(context)
+        shareImage(context, bitmap)
     }
 
     fun reset() {
@@ -183,7 +168,49 @@ class GalleryViewModel : ViewModel() {
             current.data.rectifiedBitmap.recycle()
         }
         loadedBitmap = null
+        // Cache will be cleared by GalleryScreen via clearResultCache when context is available
         _state.value = GalleryUiState.Idle
+    }
+
+    /**
+     * Rotates the rectified bitmap 90 degrees clockwise and emits an updated Result.
+     */
+    fun rotateResult() {
+        val current = _state.value
+        if (current !is GalleryUiState.Result) return
+        val data = current.data
+        val oldBitmap = data.rectifiedBitmap
+
+        val matrix = android.graphics.Matrix().apply { postRotate(90f) }
+        val rotated = Bitmap.createBitmap(
+            oldBitmap, 0, 0, oldBitmap.width, oldBitmap.height, matrix, true
+        )
+        if (rotated !== oldBitmap) oldBitmap.recycle()
+
+        _state.value = GalleryUiState.Result(
+            data.copy(
+                rectifiedBitmap = rotated,
+                manualRotationSteps = (data.manualRotationSteps + 1) % 4
+            )
+        )
+    }
+
+    /**
+     * Transitions from Result back to ManualAdjust so the user can re-adjust corners.
+     */
+    fun adjustFromResult() {
+        val current = _state.value
+        if (current !is GalleryUiState.Result) return
+        val data = current.data
+        if (data.corners.isEmpty()) return
+
+        // Recycle the rectified bitmap; user will re-rectify after adjustment
+        data.rectifiedBitmap.recycle()
+
+        _state.value = GalleryUiState.ManualAdjust(
+            bitmap = data.originalBitmap,
+            corners = data.corners
+        )
     }
 
     /**
@@ -234,6 +261,86 @@ class GalleryViewModel : ViewModel() {
         }
     }
 
+    // ── Result bitmap caching for process death recovery ────────────────
+
+    /**
+     * Saves both the rectified and original bitmaps to cacheDir/gallery_result_cache/ as JPEG files.
+     * Called before sharing so that if the ViewModel is destroyed while the user is in the
+     * share app, we can restore the result screen.
+     */
+    private fun cacheResultForRestore(context: Context) {
+        val current = _state.value
+        if (current !is GalleryUiState.Result) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cacheDir = File(context.cacheDir, RESULT_CACHE_DIR)
+                if (!cacheDir.exists()) cacheDir.mkdirs()
+
+                File(cacheDir, RESULT_CACHE_FILE).outputStream().use {
+                    current.data.rectifiedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+                }
+                File(cacheDir, ORIGINAL_CACHE_FILE).outputStream().use {
+                    current.data.originalBitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+                }
+                Log.d(TAG, "Gallery result cached for restore")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to cache gallery result: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Attempts to restore the result screen from cached bitmap files.
+     * Returns true if restore succeeded (state transitions to Result), false otherwise.
+     */
+    fun restoreFromCache(context: Context): Boolean {
+        val cacheDir = File(context.cacheDir, RESULT_CACHE_DIR)
+        val rectifiedFile = File(cacheDir, RESULT_CACHE_FILE)
+        val originalFile = File(cacheDir, ORIGINAL_CACHE_FILE)
+
+        if (!rectifiedFile.exists() || !originalFile.exists()) return false
+
+        try {
+            val rectifiedBitmap = android.graphics.BitmapFactory.decodeFile(rectifiedFile.absolutePath)
+            val originalBitmap = android.graphics.BitmapFactory.decodeFile(originalFile.absolutePath)
+
+            if (rectifiedBitmap == null || originalBitmap == null) {
+                rectifiedBitmap?.recycle()
+                originalBitmap?.recycle()
+                return false
+            }
+
+            _state.value = GalleryUiState.Result(
+                CaptureResultData(
+                    originalBitmap = originalBitmap,
+                    rectifiedBitmap = rectifiedBitmap,
+                    pipelineMs = 0.0,
+                    confidence = 0.0,
+                    corners = emptyList(),
+                    normalizedCorners = floatArrayOf()
+                )
+            )
+            Log.d(TAG, "Gallery result restored from cache")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore gallery result from cache: ${e.message}")
+            return false
+        }
+    }
+
+    /** Deletes cached result bitmap files. Call when the user explicitly leaves the result screen. */
+    fun clearResultCache(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cacheDir = File(context.cacheDir, RESULT_CACHE_DIR)
+                cacheDir.listFiles()?.forEach { it.delete() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear gallery result cache: ${e.message}")
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         val current = _state.value
@@ -242,13 +349,14 @@ class GalleryViewModel : ViewModel() {
                 current.data.originalBitmap.recycle()
                 current.data.rectifiedBitmap.recycle()
             }
-            is GalleryUiState.Detected,
             is GalleryUiState.ManualAdjust -> {
                 loadedBitmap?.recycle()
             }
             else -> {}
         }
         loadedBitmap = null
+        // Do NOT delete cache files here — they must survive ViewModel death
+        // so restoreFromCache() can recover the result screen
     }
 
     private fun rectifyWithCorners(bitmap: Bitmap, corners: List<Point>) {

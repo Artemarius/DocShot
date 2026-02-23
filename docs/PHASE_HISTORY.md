@@ -25,7 +25,8 @@
 | v1.2.2 | Manual Capture Path | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.3 | Zero-Shutter-Lag Capture | Complete | ~124 unit + 27 instrumented = ~151 |
 | v1.2.4 | Low-Contrast Detection | Complete | ~124 unit + 32 instrumented = ~156 |
-| v1.2.5 | Ultra-Low-Contrast + Native Accel | In Progress | ~124 unit + 35 instrumented = ~159 |
+| v1.2.5 | Ultra-Low-Contrast + Native Accel | Complete | ~124 unit + 69 instrumented = ~193 |
+| v1.2.6 | Result Persistence + Auto WB | Complete | — (count unchanged) |
 
 ---
 

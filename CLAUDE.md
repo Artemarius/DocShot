@@ -59,7 +59,7 @@ app/src/main/
     └── jni_bridge.cpp               # JNI entry point (GetPrimitiveArrayCritical zero-copy)
 ```
 
-## Current State (v1.2.5)
+## Current State (v1.2.6)
 - **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
 - **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
 - **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
@@ -71,6 +71,11 @@ app/src/main/
   - **WP-D (line suppression) complete:** `suppressSpanningLines()` in EdgeDetector.kt — HoughLinesP detects image-spanning lines, `spansOppositeBorders` filter (left↔right or top↔bottom), zero-strip + morph close junction healing. Wired into detectWithStrategy() between edge production and contour analysis.
   - **69/69 instrumented tests pass on S21.** 23 new test methods + 6 new synthetic generators. Key parameter tuning during testing: HOUGH_THRESHOLD 80→150 (noise rejection), MASKING_THICKNESS 5→3 (junction healing), isNearBorder→spansOppositeBorders (partial doc protection).
   - **E6 in-field validated (S21):** Beige tile scene (the original failure) — auto-capture at 0.77 confidence via DOG + line suppression. 1-10 spanning lines suppressed per frame. Zero-tap capture where previously manual-only.
+- **v1.2.6 complete.** Result screen persistence + auto white balance:
+  - **Result screen persistence after sharing:** Removed `FLAG_ACTIVITY_NEW_TASK` from share chooser (was causing Activity recreation on return). Changed `showingResult` to `rememberSaveable` to survive config changes. Added bitmap caching to `cacheDir/result_cache/` before sharing — both ViewModels cache rectified + original bitmaps, restore from cache on composition if state was lost. Cache cleared on explicit retake. Share filenames now timestamped (`DocShot_YYYYMMDD_HHmmss.jpg`).
+  - **Auto white balance (gray world):** `applyWhiteBalance()` in PostProcessor.kt — per-channel mean normalization in BGR space. Corrects outdoor blue tint by converging R, G, B averages to a common gray value. Applied as a base correction BEFORE other filters (WB + B&W, WB + Contrast, etc.). ~60ms on 12MP.
+  - **WB toggle button:** Sun icon in ResultScreen TopAppBar, tinted when active. Session toggle (starts from setting, can be toggled per result without persisting).
+  - **WB settings:** `autoWhiteBalance` in DataStore (default: true). Toggle in Settings > Output section. Controls initial WB state for new results.
 
 ## Key Architecture Details (for current work)
 
@@ -123,6 +128,18 @@ app/src/main/
 - Zero overhead on grout-free scenes (~0.3ms HoughLinesP returns empty, morph close skipped).
 - `spansOppositeBorders` is critical: original `isNearBorder` (any border) falsely suppressed partial document edges running along a single border.
 - Low-contrast non-white strategy broadening (WP-C) is complementary: DOG helps thresholding (Canny 10/30 vs 100/199), line suppression resolves topology corruption. Neither alone solves the grout-line problem.
+
+### Auto White Balance (v1.2.6)
+- Gray world assumption: per-channel mean normalization in BGR space. `avgMean = (meanB + meanG + meanR) / 3`, scale each channel by `avgMean / channelMean`. ~60ms on 12MP.
+- Applied as **base correction before filters** via `applyFilter(source, filter, applyWhiteBalance=true)` — not a separate PostProcessFilter enum value. This allows WB + B&W, WB + Contrast, WB + Even Light combinations.
+- Session toggle on ResultScreen (sun icon in TopAppBar): starts from `DocShotSettings.autoWhiteBalance` (default: true), toggleable per result without persisting. Settings toggle controls the default.
+- View-only: WB correction shown on screen but save/share use raw rectified bitmap (consistent with existing filter behavior).
+
+### Result Screen Persistence (v1.2.6)
+- **Primary fix:** Removed `Intent.FLAG_ACTIVITY_NEW_TASK` from share chooser — this flag caused Android to create a new task on return from the share app, destroying the result screen.
+- **Config change resilience:** `showingResult` in MainActivity changed from `remember` to `rememberSaveable`.
+- **Process death resilience:** Before sharing, both ViewModels cache rectified + original bitmaps to `cacheDir/result_cache/` (camera) or `cacheDir/gallery_result_cache/` (gallery) as JPEG. On composition, if ViewModel state is Idle but cache exists, `restoreFromCache()` reloads the bitmaps into a new `CameraUiState.Result` / `GalleryUiState.Result`. Cache cleared explicitly on retake via `clearResultCache()`.
+- Cache files survive ViewModel death (`onCleared()` does NOT delete them).
 
 ### Confidence Thresholds
 - No corners (empty list): routes to manual corner placement with 10%-inset defaults

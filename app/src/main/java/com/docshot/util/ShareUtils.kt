@@ -6,6 +6,9 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private const val TAG = "DocShot:Share"
 private const val AUTHORITY = "com.docshot.fileprovider"
@@ -20,7 +23,8 @@ fun shareImage(context: Context, bitmap: Bitmap) {
     val shareDir = File(context.cacheDir, "shared")
     if (!shareDir.exists()) shareDir.mkdirs()
 
-    val file = File(shareDir, "docshot_share.jpg")
+    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+    val file = File(shareDir, "DocShot_$timestamp.jpg")
     file.outputStream().use { stream ->
         bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)
     }
@@ -34,7 +38,8 @@ fun shareImage(context: Context, bitmap: Bitmap) {
     }
 
     val chooser = Intent.createChooser(intent, null)
-    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    // Do NOT add FLAG_ACTIVITY_NEW_TASK — using Activity context, and the flag
+    // can cause Android to create a new task/activity on return from share
     context.startActivity(chooser)
 
     Log.d(TAG, "Share intent launched")

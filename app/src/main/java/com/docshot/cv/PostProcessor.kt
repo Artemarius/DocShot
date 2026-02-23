@@ -32,17 +32,79 @@ enum class PostProcessFilter {
 }
 
 /**
- * Applies a post-processing filter to the given bitmap.
+ * Applies a post-processing filter to the given bitmap, optionally preceded
+ * by gray world white balance correction.
  * Returns a NEW bitmap — the caller is responsible for recycling both
  * the source and the returned bitmap when done.
  */
-fun applyFilter(source: Bitmap, filter: PostProcessFilter): Bitmap {
-    return when (filter) {
-        PostProcessFilter.NONE -> source.copy(source.config ?: Bitmap.Config.ARGB_8888, false)
-        PostProcessFilter.BLACK_WHITE -> adaptiveThresholdBW(source)
-        PostProcessFilter.CONTRAST -> enhanceContrast(source)
-        PostProcessFilter.COLOR_CORRECT -> correctColor(source)
+fun applyFilter(source: Bitmap, filter: PostProcessFilter, applyWhiteBalance: Boolean = false): Bitmap {
+    // Step 1: optionally apply white balance as base correction
+    val wbBitmap = if (applyWhiteBalance) applyWhiteBalance(source) else null
+    val effectiveSource = wbBitmap ?: source
+
+    // Step 2: apply the selected filter
+    val result = when (filter) {
+        PostProcessFilter.NONE -> effectiveSource.copy(effectiveSource.config ?: Bitmap.Config.ARGB_8888, false)
+        PostProcessFilter.BLACK_WHITE -> adaptiveThresholdBW(effectiveSource)
+        PostProcessFilter.CONTRAST -> enhanceContrast(effectiveSource)
+        PostProcessFilter.COLOR_CORRECT -> correctColor(effectiveSource)
     }
+
+    // Recycle the intermediate WB bitmap (filter functions create their own output)
+    wbBitmap?.recycle()
+
+    return result
+}
+
+/**
+ * Applies gray world white balance correction.
+ * Normalizes per-channel means so R, G, B averages converge to a common gray.
+ * Effective for outdoor blue tint from daylight color temperature.
+ */
+fun applyWhiteBalance(source: Bitmap): Bitmap {
+    val start = System.nanoTime()
+
+    val rgba = Mat()
+    Utils.bitmapToMat(source, rgba)
+    val bgr = Mat()
+    Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR)
+    rgba.release()
+
+    val channels = mutableListOf<Mat>()
+    Core.split(bgr, channels)
+    bgr.release()
+
+    // Compute per-channel means
+    val meanB = Core.mean(channels[0]).`val`[0]
+    val meanG = Core.mean(channels[1]).`val`[0]
+    val meanR = Core.mean(channels[2]).`val`[0]
+    val avgMean = (meanB + meanG + meanR) / 3.0
+
+    // Scale each channel to match the average mean
+    val scaleB = avgMean / maxOf(meanB, 1.0)
+    val scaleG = avgMean / maxOf(meanG, 1.0)
+    val scaleR = avgMean / maxOf(meanR, 1.0)
+
+    channels[0].convertTo(channels[0], -1, scaleB, 0.0)
+    channels[1].convertTo(channels[1], -1, scaleG, 0.0)
+    channels[2].convertTo(channels[2], -1, scaleR, 0.0)
+
+    val corrected = Mat()
+    Core.merge(channels, corrected)
+    channels.forEach { it.release() }
+
+    val resultRgba = Mat()
+    Imgproc.cvtColor(corrected, resultRgba, Imgproc.COLOR_BGR2RGBA)
+    corrected.release()
+
+    val result = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    Utils.matToBitmap(resultRgba, result)
+    resultRgba.release()
+
+    val ms = (System.nanoTime() - start) / 1_000_000.0
+    Log.d(TAG, "whiteBalance (gray world): %.1f ms (B=%.1f G=%.1f R=%.1f → avg=%.1f, scales=%.2f/%.2f/%.2f)".format(
+        ms, meanB, meanG, meanR, avgMean, scaleB, scaleG, scaleR))
+    return result
 }
 
 /**

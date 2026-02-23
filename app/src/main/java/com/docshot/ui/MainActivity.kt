@@ -57,7 +57,7 @@ private fun MainContent() {
     }
     var selectedTab by rememberSaveable { mutableIntStateOf(if (hasCamera) 0 else 1) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    var showingResult by remember { mutableStateOf(false) }
+    var showingResult by rememberSaveable { mutableStateOf(false) }
     val preferencesRepository = remember { UserPreferencesRepository(context) }
 
     if (showSettings) {

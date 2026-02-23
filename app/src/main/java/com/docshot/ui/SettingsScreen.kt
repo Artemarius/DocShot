@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -130,6 +131,14 @@ fun SettingsScreen(
 
             // ── Output section ───────────────────────────────────────────
             SectionHeader(text = "Output")
+
+            SettingsToggleItem(
+                icon = Icons.Filled.WbSunny,
+                title = "Auto white balance",
+                description = "Automatically correct color cast from outdoor lighting",
+                checked = settings.autoWhiteBalance,
+                onCheckedChange = { scope.launch { preferencesRepository.setAutoWhiteBalance(it) } }
+            )
 
             // Format chips
             ListItem(

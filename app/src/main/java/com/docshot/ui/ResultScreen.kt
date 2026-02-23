@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -75,8 +76,8 @@ private const val FORMAT_SNAP_THRESHOLD = 0.06f
 @Composable
 fun ResultScreen(
     data: CaptureResultData,
-    onSave: () -> Unit,
-    onShare: () -> Unit,
+    onSave: (Bitmap) -> Unit,
+    onShare: (Bitmap) -> Unit,
     onRetake: () -> Unit,
     onAdjust: () -> Unit = {},
     onRotate: () -> Unit = {},
@@ -84,12 +85,15 @@ fun ResultScreen(
     isAspectRatioLocked: Boolean = false,
     lockedAspectRatio: Float = 0.707f,
     onToggleAspectRatioLock: (Boolean, Float) -> Unit = { _, _ -> },
-    aspectRatioAutoEstimate: Boolean = true
+    aspectRatioAutoEstimate: Boolean = true,
+    autoWhiteBalanceEnabled: Boolean = true,
+    onToggleWhiteBalance: (Boolean) -> Unit = {}
 ) {
     var showRectified by rememberSaveable { mutableStateOf(true) }
     var selectedFilter by rememberSaveable { mutableStateOf(PostProcessFilter.NONE.name) }
     var processedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
+    var whiteBalanceActive by rememberSaveable { mutableStateOf(autoWhiteBalanceEnabled) }
 
     // Aspect ratio estimation (runs once per corner set)
     val estimate = remember(data.corners, data.cameraIntrinsics) {
@@ -154,9 +158,9 @@ fun ResultScreen(
         onAspectRatioChange(ratio.toDouble())
     }
 
-    // Apply filter off the main thread whenever the selection or bitmap changes
-    LaunchedEffect(selectedFilter, showRectified, data.rectifiedBitmap) {
-        if (!showRectified || selectedFilter == PostProcessFilter.NONE.name) {
+    // Apply filter (and optional WB) off the main thread whenever selection or bitmap changes
+    LaunchedEffect(selectedFilter, showRectified, data.rectifiedBitmap, whiteBalanceActive) {
+        if (!showRectified || (selectedFilter == PostProcessFilter.NONE.name && !whiteBalanceActive)) {
             processedBitmap?.recycle()
             processedBitmap = null
             return@LaunchedEffect
@@ -165,7 +169,8 @@ fun ResultScreen(
         val result = withContext(Dispatchers.Default) {
             applyFilter(
                 source = data.rectifiedBitmap,
-                filter = PostProcessFilter.valueOf(selectedFilter)
+                filter = PostProcessFilter.valueOf(selectedFilter),
+                applyWhiteBalance = whiteBalanceActive
             )
         }
         processedBitmap?.recycle()
@@ -196,6 +201,18 @@ fun ResultScreen(
                 }
             },
             actions = {
+                IconButton(onClick = {
+                    whiteBalanceActive = !whiteBalanceActive
+                    onToggleWhiteBalance(whiteBalanceActive)
+                }) {
+                    Icon(
+                        imageVector = Icons.Filled.WbSunny,
+                        contentDescription = if (whiteBalanceActive) "Disable white balance"
+                            else "Enable white balance",
+                        tint = if (whiteBalanceActive) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 IconButton(onClick = onRotate) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.RotateRight,
@@ -438,14 +455,14 @@ fun ResultScreen(
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             OutlinedButton(
-                onClick = onShare,
+                onClick = { onShare(displayBitmap) },
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Share")
             }
             Spacer(modifier = Modifier.width(16.dp))
             Button(
-                onClick = onSave,
+                onClick = { onSave(displayBitmap) },
                 modifier = Modifier.weight(1f)
             ) {
                 Text("Save")

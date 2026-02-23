@@ -140,6 +140,13 @@ fun CameraPreview(
         viewModel.setContext(context)
     }
 
+    // Restore result screen from cache after process death (share intent killed Activity)
+    LaunchedEffect(Unit) {
+        if (cameraState is CameraUiState.Idle) {
+            viewModel.restoreFromCache(context)
+        }
+    }
+
     // Sync persisted flash setting into ViewModel on first composition
     LaunchedEffect(preferencesRepository) {
         if (preferencesRepository != null) {
@@ -184,14 +191,17 @@ fun CameraPreview(
         val resultData = (cameraState as CameraUiState.Result).data
         ResultScreen(
             data = resultData,
-            onSave = {
-                viewModel.saveResult(context) { success ->
+            onSave = { bitmap ->
+                viewModel.saveResult(context, bitmap) { success ->
                     val msg = if (success) "Saved to gallery" else "Save failed"
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             },
-            onShare = { viewModel.shareResult(context) },
-            onRetake = { viewModel.resetToCamera() },
+            onShare = { bitmap -> viewModel.shareResult(context, bitmap) },
+            onRetake = {
+                viewModel.clearResultCache(context)
+                viewModel.resetToCamera()
+            },
             onAdjust = { viewModel.adjustFromResult() },
             onRotate = { viewModel.rotateResult() },
             onAspectRatioChange = { viewModel.reWarpWithAspectRatio(it) },
@@ -203,7 +213,9 @@ fun CameraPreview(
                     preferencesRepository?.setLockedAspectRatio(ratio)
                 }
             },
-            aspectRatioAutoEstimate = settings.aspectRatioAutoEstimate
+            aspectRatioAutoEstimate = settings.aspectRatioAutoEstimate,
+            autoWhiteBalanceEnabled = settings.autoWhiteBalance,
+            onToggleWhiteBalance = { /* local toggle only, no persistence needed */ }
         )
         return
     }

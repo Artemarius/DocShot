@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
+import java.io.File
 import java.lang.ref.WeakReference
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -105,6 +106,12 @@ data class CaptureResultData(
 )
 
 class CameraViewModel : ViewModel() {
+
+    companion object {
+        private const val RESULT_CACHE_DIR = "result_cache"
+        private const val RESULT_CACHE_FILE = "current_result.jpg"
+        private const val ORIGINAL_CACHE_FILE = "current_original.jpg"
+    }
 
     private val _detectionState = MutableStateFlow(DetectionUiState())
     val detectionState: StateFlow<DetectionUiState> = _detectionState
@@ -405,24 +412,21 @@ class CameraViewModel : ViewModel() {
         )
     }
 
-    /** Saves the rectified bitmap to the device gallery. Returns true on success. */
-    fun saveResult(context: Context, onResult: (Boolean) -> Unit) {
-        val state = _cameraState.value
-        if (state !is CameraUiState.Result) return
-
+    /** Saves the displayed bitmap (with WB + filter applied) to the device gallery. */
+    fun saveResult(context: Context, bitmap: Bitmap, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val displayName = "DocShot_$timestamp"
-            val uri = saveBitmapToGallery(context, state.data.rectifiedBitmap, displayName)
+            val uri = saveBitmapToGallery(context, bitmap, displayName)
             onResult(uri != null)
         }
     }
 
-    /** Shares the rectified bitmap via the system share sheet. */
-    fun shareResult(context: Context) {
-        val state = _cameraState.value
-        if (state !is CameraUiState.Result) return
-        shareImage(context, state.data.rectifiedBitmap)
+    /** Shares the displayed bitmap (with WB + filter applied) via the system share sheet. */
+    fun shareResult(context: Context, bitmap: Bitmap) {
+        if (_cameraState.value !is CameraUiState.Result) return
+        cacheResultForRestore(context)
+        shareImage(context, bitmap)
     }
 
     /** Returns to camera preview and recycles bitmaps. */
@@ -438,6 +442,7 @@ class CameraViewModel : ViewModel() {
             }
             else -> { /* no bitmaps to recycle */ }
         }
+        // Cache will be cleared by CameraScreen via clearResultCache when context is available
         enterIdle()
     }
 
@@ -745,6 +750,86 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    // ── Result bitmap caching for process death recovery ────────────────
+
+    /**
+     * Saves both the rectified and original bitmaps to cacheDir/result_cache/ as JPEG files.
+     * Called before sharing so that if the ViewModel is destroyed while the user is in the
+     * share app, we can restore the result screen.
+     */
+    private fun cacheResultForRestore(context: Context) {
+        val state = _cameraState.value
+        if (state !is CameraUiState.Result) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cacheDir = File(context.cacheDir, RESULT_CACHE_DIR)
+                if (!cacheDir.exists()) cacheDir.mkdirs()
+
+                File(cacheDir, RESULT_CACHE_FILE).outputStream().use {
+                    state.data.rectifiedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+                }
+                File(cacheDir, ORIGINAL_CACHE_FILE).outputStream().use {
+                    state.data.originalBitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+                }
+                Log.d(TAG, "Result cached for restore")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to cache result: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Attempts to restore the result screen from cached bitmap files.
+     * Returns true if restore succeeded (state transitions to Result), false otherwise.
+     */
+    fun restoreFromCache(context: Context): Boolean {
+        val cacheDir = File(context.cacheDir, RESULT_CACHE_DIR)
+        val rectifiedFile = File(cacheDir, RESULT_CACHE_FILE)
+        val originalFile = File(cacheDir, ORIGINAL_CACHE_FILE)
+
+        if (!rectifiedFile.exists() || !originalFile.exists()) return false
+
+        try {
+            val rectifiedBitmap = android.graphics.BitmapFactory.decodeFile(rectifiedFile.absolutePath)
+            val originalBitmap = android.graphics.BitmapFactory.decodeFile(originalFile.absolutePath)
+
+            if (rectifiedBitmap == null || originalBitmap == null) {
+                rectifiedBitmap?.recycle()
+                originalBitmap?.recycle()
+                return false
+            }
+
+            _cameraState.value = CameraUiState.Result(
+                CaptureResultData(
+                    originalBitmap = originalBitmap,
+                    rectifiedBitmap = rectifiedBitmap,
+                    pipelineMs = 0.0,
+                    confidence = 0.0,
+                    corners = emptyList(),
+                    normalizedCorners = floatArrayOf()
+                )
+            )
+            Log.d(TAG, "Result restored from cache")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restore result from cache: ${e.message}")
+            return false
+        }
+    }
+
+    /** Deletes cached result bitmap files. Call when the user explicitly leaves the result screen. */
+    fun clearResultCache(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cacheDir = File(context.cacheDir, RESULT_CACHE_DIR)
+                cacheDir.listFiles()?.forEach { it.delete() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear result cache: ${e.message}")
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         // Release native Mat resources (CornerTracker + MultiFrameAspectEstimator)
@@ -760,5 +845,7 @@ class CameraViewModel : ViewModel() {
             }
             else -> { /* no bitmaps to recycle */ }
         }
+        // Do NOT delete cache files here — they must survive ViewModel death
+        // so restoreFromCache() can recover the result screen
     }
 }
