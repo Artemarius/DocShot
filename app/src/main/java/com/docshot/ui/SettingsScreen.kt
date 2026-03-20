@@ -1,5 +1,6 @@
 package com.docshot.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -24,6 +25,9 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -43,7 +47,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.net.Uri
 import com.docshot.util.DocShotSettings
 import com.docshot.util.UserPreferencesRepository
 import kotlinx.coroutines.launch
@@ -234,6 +241,67 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // ── About section ─────────────────────────────────────────
+            SectionHeader(text = "About")
+
+            val aboutContext = LocalContext.current
+
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Outlined.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                headlineContent = { Text("Privacy Policy") },
+                supportingContent = { Text("No data collection — everything stays on your device") },
+                modifier = Modifier.clickable {
+                    val intent = Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("https://artemarius.github.io/DocShot/privacy-policy.html")
+                    )
+                    aboutContext.startActivity(intent)
+                }
+            )
+
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Outlined.Email,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                headlineContent = { Text("Send Feedback") },
+                supportingContent = { Text("Report issues or suggest features on GitHub") },
+                modifier = Modifier.clickable {
+                    val intent = Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("https://github.com/Artemarius/DocShot/issues")
+                    )
+                    aboutContext.startActivity(intent)
+                }
+            )
+
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Outlined.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                headlineContent = { Text("Version") },
+                supportingContent = {
+                    val packageInfo = aboutContext.packageManager
+                        .getPackageInfo(aboutContext.packageName, 0)
+                    Text("${packageInfo.versionName}")
                 }
             )
 
