@@ -50,18 +50,24 @@ Android document rectification app. Camera input -> automatic document boundary 
 app/src/main/
 ├── java/com/docshot/
 │   ├── ui/          # Compose screens + navigation
+│   │   ├── OnboardingScreen  # First-launch 3-page walkthrough
+│   │   └── SettingsScreen    # Preferences + About section (privacy, feedback, tutorial replay)
 │   ├── camera/      # CameraX setup, frame analysis, QuadSmoother, CornerTracker
 │   ├── cv/          # Document detection, rectification, post-processing, LSD+Radon detector, NativeAccel JNI bridge
 │   └── util/        # Permissions, image I/O, gallery save, DataStore prefs
+├── res/values/strings.xml  # All UI strings (i18n-ready, ~95 entries)
 └── cpp/             # NDK native code (libdocshot_native.so)
     ├── CMakeLists.txt
     ├── directional_gradient.cpp/h   # C++ hot loop for DIRECTIONAL_GRADIENT steps 4-6
     └── jni_bridge.cpp               # JNI entry point (GetPrimitiveArrayCritical zero-copy)
 ```
 
-## Current State (v1.2.6)
-- **Phases 1-11 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light). See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
-- **Phase 12 (Play Store release) in progress.** App submitted to testers (14-day testing period). App icon, splash screen, signing, privacy policy, store listing done.
+## Current State (v1.3.0)
+- **Phases 1-12 complete.** Full classical CV pipeline, auto-capture with AF lock, aspect ratio slider with format snapping, flash, gallery import, post-processing filters (B&W, Contrast, Even Light), Play Store release. See [docs/PHASE_HISTORY.md](docs/PHASE_HISTORY.md) for detailed phase-by-phase history.
+- **v1.3.0 (tester feedback response):**
+  - **First-launch onboarding:** 3-page HorizontalPager walkthrough (camera detection, auto-capture, result screen). Gated by `hasSeenOnboarding` in DataStore. Skip on any page, "Get Started" on last. Replayable via Settings > About > "Show tutorial".
+  - **In-app privacy policy & feedback links:** Settings > About section with Privacy Policy (opens GitHub Pages), Send Feedback (opens GitHub Issues), Version display, and tutorial replay.
+  - **i18n readiness:** All ~95 user-facing strings extracted from 7 Compose screens to `res/values/strings.xml` using `stringResource()`. Adding a new language now requires only a `res/values-xx/strings.xml` translation file. Debug overlay and PipelineTestScreen strings left hardcoded (developer-facing).
 - **v1.2.4 complete.** Low-contrast / white-on-white detection: 5 new preprocessing strategies (ADAPTIVE_THRESHOLD, LAB_CLAHE, GRADIENT_MAGNITUDE, DOG, MULTICHANNEL_FUSION) with scene-aware strategy selection. White-on-white scenes (mean > 180, stddev < 35) use specialized strategies that handle 5-35 unit gradients where auto-Canny saturates. Binary-output strategies bypass Canny entirely. Zero performance regression for non-white-on-white scenes.
 - **Capture preview overlay:** During capture freeze, quad overlay fills with the actual preview frame (70% alpha) clipped to the quad path, giving instant visual confirmation of what was captured.
 - **v1.2.5 implementation complete (WP-A through WP-E5), E6 in-field validation remaining.** Ultra-low-contrast detection + low-contrast non-white fixes:
