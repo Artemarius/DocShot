@@ -28,7 +28,8 @@ data class DocShotSettings(
     val aspectRatioLocked: Boolean = false,
     val lockedAspectRatio: Float = 0.707f,
     val aspectRatioAutoEstimate: Boolean = true,
-    val autoWhiteBalance: Boolean = true
+    val autoWhiteBalance: Boolean = true,
+    val hasSeenOnboarding: Boolean = false
 )
 
 /**
@@ -51,6 +52,7 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_LOCKED_ASPECT_RATIO = floatPreferencesKey("locked_aspect_ratio")
         val KEY_ASPECT_RATIO_AUTO_ESTIMATE = booleanPreferencesKey("aspect_ratio_auto_estimate")
         val KEY_AUTO_WHITE_BALANCE = booleanPreferencesKey("auto_white_balance")
+        val KEY_HAS_SEEN_ONBOARDING = booleanPreferencesKey("has_seen_onboarding")
     }
 
     /**
@@ -69,7 +71,8 @@ class UserPreferencesRepository(private val context: Context) {
             aspectRatioLocked = prefs[KEY_ASPECT_RATIO_LOCKED] ?: false,
             lockedAspectRatio = prefs[KEY_LOCKED_ASPECT_RATIO] ?: 0.707f,
             aspectRatioAutoEstimate = prefs[KEY_ASPECT_RATIO_AUTO_ESTIMATE] ?: true,
-            autoWhiteBalance = prefs[KEY_AUTO_WHITE_BALANCE] ?: true
+            autoWhiteBalance = prefs[KEY_AUTO_WHITE_BALANCE] ?: true,
+            hasSeenOnboarding = prefs[KEY_HAS_SEEN_ONBOARDING] ?: false
         )
     }
 
@@ -121,5 +124,9 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setAutoWhiteBalance(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[KEY_AUTO_WHITE_BALANCE] = enabled }
+    }
+
+    suspend fun setHasSeenOnboarding(seen: Boolean) {
+        context.dataStore.edit { prefs -> prefs[KEY_HAS_SEEN_ONBOARDING] = seen }
     }
 }

@@ -22,17 +22,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.docshot.ui.theme.DocShotTheme
+import com.docshot.util.DocShotSettings
 import com.docshot.util.UserPreferencesRepository
 
 class MainActivity : ComponentActivity() {
@@ -59,11 +63,27 @@ private fun MainContent() {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showingResult by rememberSaveable { mutableStateOf(false) }
     val preferencesRepository = remember { UserPreferencesRepository(context) }
+    val settings by preferencesRepository.settings.collectAsState(initial = DocShotSettings())
+    val scope = rememberCoroutineScope()
+
+    // Show onboarding on first launch
+    if (!settings.hasSeenOnboarding) {
+        OnboardingScreen(
+            onFinish = {
+                scope.launch { preferencesRepository.setHasSeenOnboarding(true) }
+            }
+        )
+        return
+    }
 
     if (showSettings) {
         SettingsScreen(
             onBack = { showSettings = false },
-            preferencesRepository = preferencesRepository
+            preferencesRepository = preferencesRepository,
+            onShowOnboarding = {
+                showSettings = false
+                scope.launch { preferencesRepository.setHasSeenOnboarding(false) }
+            }
         )
         return
     }

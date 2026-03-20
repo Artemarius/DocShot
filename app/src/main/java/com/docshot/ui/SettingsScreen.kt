@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,7 +61,8 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    preferencesRepository: UserPreferencesRepository
+    preferencesRepository: UserPreferencesRepository,
+    onShowOnboarding: () -> Unit = {}
 ) {
     val settings by preferencesRepository.settings.collectAsState(initial = DocShotSettings())
     val scope = rememberCoroutineScope()
@@ -250,6 +252,19 @@ fun SettingsScreen(
             SectionHeader(text = "About")
 
             val aboutContext = LocalContext.current
+
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Outlined.HelpOutline,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                headlineContent = { Text("Show tutorial") },
+                supportingContent = { Text("Replay the getting-started walkthrough") },
+                modifier = Modifier.clickable { onShowOnboarding() }
+            )
 
             ListItem(
                 leadingContent = {
