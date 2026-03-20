@@ -49,9 +49,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import android.content.Intent
 import android.net.Uri
+import com.docshot.R
 import com.docshot.util.DocShotSettings
 import com.docshot.util.UserPreferencesRepository
 import kotlinx.coroutines.launch
@@ -70,12 +72,12 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text(stringResource(R.string.title_settings)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+                            contentDescription = stringResource(R.string.cd_back)
                         )
                     }
                 }
@@ -89,36 +91,36 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             // ── Capture section ──────────────────────────────────────────
-            SectionHeader(text = "Capture")
+            SectionHeader(text = stringResource(R.string.section_capture))
 
             SettingsToggleItem(
                 icon = Icons.Filled.CameraAlt,
-                title = "Auto-capture",
-                description = "Automatically capture when a stable document is detected",
+                title = stringResource(R.string.setting_auto_capture),
+                description = stringResource(R.string.setting_auto_capture_desc),
                 checked = settings.autoCaptureEnabled,
                 onCheckedChange = { scope.launch { preferencesRepository.setAutoCaptureEnabled(it) } }
             )
 
             SettingsToggleItem(
                 icon = Icons.Filled.Vibration,
-                title = "Haptic feedback",
-                description = "Vibrate on capture",
+                title = stringResource(R.string.setting_haptic),
+                description = stringResource(R.string.setting_haptic_desc),
                 checked = settings.hapticFeedback,
                 onCheckedChange = { scope.launch { preferencesRepository.setHapticFeedback(it) } }
             )
 
             SettingsToggleItem(
                 icon = Icons.Filled.FlashOn,
-                title = "Flash",
-                description = "Enable camera torch for low-light scanning",
+                title = stringResource(R.string.setting_flash),
+                description = stringResource(R.string.setting_flash_desc),
                 checked = settings.flashEnabled,
                 onCheckedChange = { scope.launch { preferencesRepository.setFlashEnabled(it) } }
             )
 
             SettingsToggleItem(
                 icon = Icons.Filled.BugReport,
-                title = "Debug overlay",
-                description = "Show detection latency on camera preview",
+                title = stringResource(R.string.setting_debug),
+                description = stringResource(R.string.setting_debug_desc),
                 checked = settings.showDebugOverlay,
                 onCheckedChange = { scope.launch { preferencesRepository.setShowDebugOverlay(it) } }
             )
@@ -126,12 +128,12 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             // ── Aspect Ratio section ─────────────────────────────────────
-            SectionHeader(text = "Aspect Ratio")
+            SectionHeader(text = stringResource(R.string.section_aspect_ratio))
 
             SettingsToggleItem(
                 icon = Icons.Filled.AspectRatio,
-                title = "Aspect ratio default",
-                description = "When enabled, automatically estimates the document's aspect ratio. When disabled, defaults to A4.",
+                title = stringResource(R.string.setting_ar_auto),
+                description = stringResource(R.string.setting_ar_auto_desc),
                 checked = settings.aspectRatioAutoEstimate,
                 onCheckedChange = { scope.launch { preferencesRepository.setAspectRatioAutoEstimate(it) } }
             )
@@ -139,12 +141,12 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             // ── Output section ───────────────────────────────────────────
-            SectionHeader(text = "Output")
+            SectionHeader(text = stringResource(R.string.section_output))
 
             SettingsToggleItem(
                 icon = Icons.Filled.WbSunny,
-                title = "Auto white balance",
-                description = "Automatically correct color cast from outdoor lighting",
+                title = stringResource(R.string.setting_wb),
+                description = stringResource(R.string.setting_wb_desc),
                 checked = settings.autoWhiteBalance,
                 onCheckedChange = { scope.launch { preferencesRepository.setAutoWhiteBalance(it) } }
             )
@@ -158,7 +160,7 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                headlineContent = { Text("Format") },
+                headlineContent = { Text(stringResource(R.string.setting_format)) },
                 supportingContent = {
                     FlowRow(
                         modifier = Modifier.padding(top = 4.dp),
@@ -185,7 +187,7 @@ fun SettingsScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
-                    headlineContent = { Text("Quality") },
+                    headlineContent = { Text(stringResource(R.string.setting_quality)) },
                     supportingContent = {
                         Column {
                             Row(
@@ -205,7 +207,7 @@ fun SettingsScreen(
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
-                                    text = "${settings.outputQuality}%",
+                                    text = stringResource(R.string.setting_quality_value, settings.outputQuality),
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                             }
@@ -223,23 +225,23 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                headlineContent = { Text("Default filter") },
+                headlineContent = { Text(stringResource(R.string.setting_default_filter)) },
                 supportingContent = {
                     FlowRow(
                         modifier = Modifier.padding(top = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val filters = listOf(
-                            "NONE" to "None",
-                            "BLACK_WHITE" to "B&W",
-                            "CONTRAST" to "Contrast",
-                            "COLOR_CORRECT" to "Even Light"
+                            "NONE" to R.string.filter_none,
+                            "BLACK_WHITE" to R.string.filter_bw,
+                            "CONTRAST" to R.string.filter_contrast,
+                            "COLOR_CORRECT" to R.string.filter_even_light
                         )
-                        filters.forEach { (key, label) ->
+                        filters.forEach { (key, labelRes) ->
                             FilterChip(
                                 selected = settings.defaultFilter == key,
                                 onClick = { scope.launch { preferencesRepository.setDefaultFilter(key) } },
-                                label = { Text(label) }
+                                label = { Text(stringResource(labelRes)) }
                             )
                         }
                     }
@@ -249,7 +251,7 @@ fun SettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             // ── About section ─────────────────────────────────────────
-            SectionHeader(text = "About")
+            SectionHeader(text = stringResource(R.string.section_about))
 
             val aboutContext = LocalContext.current
 
@@ -261,8 +263,8 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                headlineContent = { Text("Show tutorial") },
-                supportingContent = { Text("Replay the getting-started walkthrough") },
+                headlineContent = { Text(stringResource(R.string.setting_show_tutorial)) },
+                supportingContent = { Text(stringResource(R.string.setting_show_tutorial_desc)) },
                 modifier = Modifier.clickable { onShowOnboarding() }
             )
 
@@ -274,8 +276,8 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                headlineContent = { Text("Privacy Policy") },
-                supportingContent = { Text("No data collection — everything stays on your device") },
+                headlineContent = { Text(stringResource(R.string.setting_privacy_policy)) },
+                supportingContent = { Text(stringResource(R.string.setting_privacy_policy_desc)) },
                 modifier = Modifier.clickable {
                     val intent = Intent(
                         Intent.ACTION_VIEW,
@@ -293,8 +295,8 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                headlineContent = { Text("Send Feedback") },
-                supportingContent = { Text("Report issues or suggest features on GitHub") },
+                headlineContent = { Text(stringResource(R.string.setting_send_feedback)) },
+                supportingContent = { Text(stringResource(R.string.setting_send_feedback_desc)) },
                 modifier = Modifier.clickable {
                     val intent = Intent(
                         Intent.ACTION_VIEW,
@@ -312,7 +314,7 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                headlineContent = { Text("Version") },
+                headlineContent = { Text(stringResource(R.string.setting_version)) },
                 supportingContent = {
                     val packageInfo = aboutContext.packageManager
                         .getPackageInfo(aboutContext.packageName, 0)

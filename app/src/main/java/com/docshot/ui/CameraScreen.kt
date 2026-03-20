@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -193,7 +194,7 @@ fun CameraPreview(
             data = resultData,
             onSave = { bitmap ->
                 viewModel.saveResult(context, bitmap) { success ->
-                    val msg = if (success) "Saved to gallery" else "Save failed"
+                    val msg = context.getString(if (success) R.string.saved_to_gallery else R.string.save_failed)
                     Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
             },
@@ -271,7 +272,7 @@ fun CameraPreview(
             Text(
                 text = if (cameraState is CameraUiState.Processing)
                     (cameraState as CameraUiState.Processing).message
-                else "Capturing...",
+                else stringResource(R.string.capturing),
                 color = Color.White,
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier
@@ -298,8 +299,9 @@ fun CameraPreview(
             Icon(
                 imageVector = if (flashEnabled) Icons.Filled.FlashOn
                     else Icons.Filled.FlashOff,
-                contentDescription = if (flashEnabled) "Turn off flash"
-                    else "Turn on flash",
+                contentDescription = stringResource(
+                    if (flashEnabled) R.string.cd_flash_off else R.string.cd_flash_on
+                ),
                 modifier = Modifier.size(22.dp),
                 tint = if (flashEnabled) Color(0xFFFFC107) else Color.White
             )
@@ -370,11 +372,10 @@ fun CameraPreview(
 
         // Hint when no detection and camera is idle
         if (detectionState.normalizedCorners == null && cameraState is CameraUiState.Idle) {
-            val hintText = if (detectionState.isPartialDocument) {
-                "Move back to fit document"
-            } else {
-                "Tap to capture manually"
-            }
+            val hintText = stringResource(
+                if (detectionState.isPartialDocument) R.string.hint_move_back
+                else R.string.hint_tap_capture
+            )
             Text(
                 text = hintText,
                 style = MaterialTheme.typography.bodyLarge,
@@ -413,7 +414,7 @@ fun CameraPreview(
             } else {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_camera),
-                    contentDescription = "Capture document",
+                    contentDescription = stringResource(R.string.cd_capture_document),
                     modifier = Modifier.size(32.dp)
                 )
             }
@@ -431,7 +432,7 @@ fun CameraPreview(
         ) {
             Icon(
                 painter = painterResource(id = R.drawable.ic_photo_library),
-                contentDescription = "Import from gallery",
+                contentDescription = stringResource(R.string.cd_import_gallery),
                 modifier = Modifier.size(24.dp)
             )
         }
@@ -450,8 +451,9 @@ fun CameraPreview(
             Icon(
                 imageVector = if (autoCapEnabled) Icons.Filled.AutoAwesome
                     else Icons.Outlined.AutoAwesome,
-                contentDescription = if (autoCapEnabled) "Disable auto-capture"
-                    else "Enable auto-capture",
+                contentDescription = stringResource(
+                    if (autoCapEnabled) R.string.cd_disable_auto_capture else R.string.cd_enable_auto_capture
+                ),
                 modifier = Modifier.size(24.dp),
                 tint = if (autoCapEnabled) MaterialTheme.colorScheme.onPrimaryContainer
                     else MaterialTheme.colorScheme.onSurfaceVariant
@@ -722,7 +724,7 @@ fun CameraDeniedMessage() {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "Camera permission is required to scan documents.",
+            text = stringResource(R.string.camera_permission_required),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -736,7 +738,7 @@ private fun NoCameraMessage() {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "No camera available on this device.",
+            text = stringResource(R.string.no_camera_available),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground
         )

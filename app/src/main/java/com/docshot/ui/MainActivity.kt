@@ -34,7 +34,9 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.docshot.R
 import com.docshot.ui.theme.DocShotTheme
 import com.docshot.util.DocShotSettings
 import com.docshot.util.UserPreferencesRepository
@@ -106,21 +108,21 @@ private fun MainContent() {
                         FilterChip(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
-                            label = { Text("Camera") }
+                            label = { Text(stringResource(R.string.tab_camera)) }
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                     FilterChip(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        label = { Text("Import") },
+                        label = { Text(stringResource(R.string.tab_import)) },
                         modifier = if (hasCamera) Modifier.padding(start = 8.dp) else Modifier
                     )
                     Spacer(modifier = Modifier.weight(1f))
                     IconButton(onClick = { showSettings = true }) {
                         Icon(
                             imageVector = Icons.Filled.Settings,
-                            contentDescription = "Settings",
+                            contentDescription = stringResource(R.string.cd_settings),
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }

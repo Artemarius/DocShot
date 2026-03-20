@@ -57,7 +57,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.docshot.R
 import com.docshot.cv.KNOWN_FORMATS
 import com.docshot.cv.PostProcessFilter
 import com.docshot.cv.applyFilter
@@ -191,12 +193,12 @@ fun ResultScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         // Top bar
         TopAppBar(
-            title = { Text("Result") },
+            title = { Text(stringResource(R.string.title_result)) },
             navigationIcon = {
                 IconButton(onClick = onRetake) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Retake"
+                        contentDescription = stringResource(R.string.cd_retake)
                     )
                 }
             },
@@ -207,8 +209,10 @@ fun ResultScreen(
                 }) {
                     Icon(
                         imageVector = Icons.Filled.WbSunny,
-                        contentDescription = if (whiteBalanceActive) "Disable white balance"
-                            else "Enable white balance",
+                        contentDescription = stringResource(
+                            if (whiteBalanceActive) R.string.cd_disable_white_balance
+                            else R.string.cd_enable_white_balance
+                        ),
                         tint = if (whiteBalanceActive) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -216,14 +220,14 @@ fun ResultScreen(
                 IconButton(onClick = onRotate) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.RotateRight,
-                        contentDescription = "Rotate"
+                        contentDescription = stringResource(R.string.cd_rotate)
                     )
                 }
                 if (hasCorners) {
                     IconButton(onClick = onAdjust) {
                         Icon(
                             imageVector = Icons.Filled.Tune,
-                            contentDescription = "Adjust corners"
+                            contentDescription = stringResource(R.string.cd_adjust_corners)
                         )
                     }
                 }
@@ -241,7 +245,7 @@ fun ResultScreen(
             FilterChip(
                 selected = !showRectified,
                 onClick = { showRectified = false },
-                label = { Text("Original") }
+                label = { Text(stringResource(R.string.filter_original)) }
             )
             FilterChip(
                 selected = showRectified && selectedFilter == PostProcessFilter.NONE.name,
@@ -249,7 +253,7 @@ fun ResultScreen(
                     showRectified = true
                     selectedFilter = PostProcessFilter.NONE.name
                 },
-                label = { Text("Rectified") }
+                label = { Text(stringResource(R.string.filter_rectified)) }
             )
             FilterChip(
                 selected = showRectified && selectedFilter == PostProcessFilter.BLACK_WHITE.name,
@@ -257,7 +261,7 @@ fun ResultScreen(
                     showRectified = true
                     selectedFilter = PostProcessFilter.BLACK_WHITE.name
                 },
-                label = { Text("B&W") }
+                label = { Text(stringResource(R.string.filter_bw)) }
             )
             FilterChip(
                 selected = showRectified && selectedFilter == PostProcessFilter.CONTRAST.name,
@@ -265,7 +269,7 @@ fun ResultScreen(
                     showRectified = true
                     selectedFilter = PostProcessFilter.CONTRAST.name
                 },
-                label = { Text("Contrast") }
+                label = { Text(stringResource(R.string.filter_contrast)) }
             )
             FilterChip(
                 selected = showRectified && selectedFilter == PostProcessFilter.COLOR_CORRECT.name,
@@ -273,7 +277,7 @@ fun ResultScreen(
                     showRectified = true
                     selectedFilter = PostProcessFilter.COLOR_CORRECT.name
                 },
-                label = { Text("Even Light") }
+                label = { Text(stringResource(R.string.filter_even_light)) }
             )
         }
 
@@ -298,8 +302,10 @@ fun ResultScreen(
                         Icon(
                             imageVector = if (isAspectRatioLocked) Icons.Filled.Lock
                                 else Icons.Filled.LockOpen,
-                            contentDescription = if (isAspectRatioLocked) "Unlock aspect ratio"
-                                else "Lock aspect ratio",
+                            contentDescription = stringResource(
+                                if (isAspectRatioLocked) R.string.cd_unlock_aspect_ratio
+                                else R.string.cd_lock_aspect_ratio
+                            ),
                             modifier = Modifier.size(14.dp),
                             tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurfaceVariant
@@ -324,7 +330,7 @@ fun ResultScreen(
                             )
                             Icon(
                                 imageVector = Icons.Filled.ArrowDropDown,
-                                contentDescription = "Select format",
+                                contentDescription = stringResource(R.string.cd_select_format),
                                 modifier = Modifier.size(14.dp),
                                 tint = if (isAspectRatioLocked) MaterialTheme.colorScheme.onSurfaceVariant
                                     else MaterialTheme.colorScheme.primary
@@ -380,11 +386,13 @@ fun ResultScreen(
         ) {
             Image(
                 bitmap = displayBitmap.asImageBitmap(),
-                contentDescription = when {
-                    !showRectified -> "Original photo"
-                    selectedFilter != PostProcessFilter.NONE.name -> "Filtered document"
-                    else -> "Rectified document"
-                },
+                contentDescription = stringResource(
+                    when {
+                        !showRectified -> R.string.cd_original_photo
+                        selectedFilter != PostProcessFilter.NONE.name -> R.string.cd_filtered_document
+                        else -> R.string.cd_rectified_document
+                    }
+                ),
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit
             )
@@ -458,14 +466,14 @@ fun ResultScreen(
                 onClick = { onShare(displayBitmap) },
                 modifier = Modifier.weight(1f)
             ) {
-                Text("Share")
+                Text(stringResource(R.string.action_share))
             }
             Spacer(modifier = Modifier.width(16.dp))
             Button(
                 onClick = { onSave(displayBitmap) },
                 modifier = Modifier.weight(1f)
             ) {
-                Text("Save")
+                Text(stringResource(R.string.action_save))
             }
         }
     }

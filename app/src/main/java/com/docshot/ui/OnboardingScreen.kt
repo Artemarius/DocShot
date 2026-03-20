@@ -1,5 +1,6 @@
 package com.docshot.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -31,31 +32,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.docshot.R
 import kotlinx.coroutines.launch
 
 private data class OnboardingPage(
     val icon: ImageVector,
-    val title: String,
-    val description: String
+    @StringRes val titleRes: Int,
+    @StringRes val descriptionRes: Int
 )
 
 private val pages = listOf(
     OnboardingPage(
         icon = Icons.Filled.CameraAlt,
-        title = "Point at any document",
-        description = "Hold your phone over a document — DocShot detects the edges automatically in real time."
+        titleRes = R.string.onboarding_title_1,
+        descriptionRes = R.string.onboarding_desc_1
     ),
     OnboardingPage(
         icon = Icons.Filled.CropFree,
-        title = "Auto-capture when steady",
-        description = "Keep the camera still for a moment. DocShot locks focus and captures automatically — no button tap needed."
+        titleRes = R.string.onboarding_title_2,
+        descriptionRes = R.string.onboarding_desc_2
     ),
     OnboardingPage(
         icon = Icons.Filled.Share,
-        title = "Adjust and share",
-        description = "Fine-tune aspect ratio, apply filters, then save to gallery or share directly."
+        titleRes = R.string.onboarding_title_3,
+        descriptionRes = R.string.onboarding_desc_3
     )
 )
 
@@ -79,7 +82,7 @@ fun OnboardingScreen(
             horizontalArrangement = Arrangement.End
         ) {
             TextButton(onClick = onFinish) {
-                Text("Skip")
+                Text(stringResource(R.string.onboarding_skip))
             }
         }
 
@@ -135,7 +138,10 @@ fun OnboardingScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    if (pagerState.currentPage < pages.size - 1) "Next" else "Get Started"
+                    stringResource(
+                        if (pagerState.currentPage < pages.size - 1) R.string.onboarding_next
+                        else R.string.onboarding_get_started
+                    )
                 )
             }
 
@@ -163,7 +169,7 @@ private fun OnboardingPageContent(page: OnboardingPage) {
         Spacer(modifier = Modifier.height(32.dp))
 
         Text(
-            text = page.title,
+            text = stringResource(page.titleRes),
             style = MaterialTheme.typography.headlineMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground
@@ -172,7 +178,7 @@ private fun OnboardingPageContent(page: OnboardingPage) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = page.description,
+            text = stringResource(page.descriptionRes),
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)

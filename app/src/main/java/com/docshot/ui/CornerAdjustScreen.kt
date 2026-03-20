@@ -46,9 +46,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.docshot.R
 import org.opencv.core.Point
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -82,12 +84,12 @@ fun CornerAdjustScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Adjust Corners") },
+                title = { Text(stringResource(R.string.title_adjust_corners)) },
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Cancel"
+                            contentDescription = stringResource(R.string.cd_cancel)
                         )
                     }
                 }
@@ -105,14 +107,14 @@ fun CornerAdjustScreen(
                         onClick = onCancel,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.action_cancel))
                     }
                     Spacer(modifier = Modifier.padding(horizontal = 8.dp))
                     Button(
                         onClick = { onApply(currentCorners) },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Apply")
+                        Text(stringResource(R.string.action_apply))
                     }
                 }
             }
@@ -126,7 +128,7 @@ fun CornerAdjustScreen(
             // Image layer
             Image(
                 bitmap = imageBitmap,
-                contentDescription = "Document to adjust",
+                contentDescription = stringResource(R.string.cd_document_to_adjust),
                 modifier = Modifier
                     .fillMaxSize()
                     .onSizeChanged { containerSize = it },

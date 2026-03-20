@@ -1,4 +1,100 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">DocShot</string>
+
+    <!-- Main navigation -->
+    <string name="tab_camera">Camera</string>
+    <string name="tab_import">Import</string>
+    <string name="cd_settings">Settings</string>
+
+    <!-- Camera screen -->
+    <string name="capturing">Capturing&#8230;</string>
+    <string name="cd_flash_off">Turn off flash</string>
+    <string name="cd_flash_on">Turn on flash</string>
+    <string name="hint_move_back">Move back to fit document</string>
+    <string name="hint_tap_capture">Tap to capture manually</string>
+    <string name="cd_capture_document">Capture document</string>
+    <string name="cd_import_gallery">Import from gallery</string>
+    <string name="cd_disable_auto_capture">Disable auto-capture</string>
+    <string name="cd_enable_auto_capture">Enable auto-capture</string>
+    <string name="camera_permission_required">Camera permission is required to scan documents.</string>
+    <string name="no_camera_available">No camera available on this device.</string>
+
+    <!-- Result screen -->
+    <string name="title_result">Result</string>
+    <string name="cd_retake">Retake</string>
+    <string name="cd_disable_white_balance">Disable white balance</string>
+    <string name="cd_enable_white_balance">Enable white balance</string>
+    <string name="cd_rotate">Rotate</string>
+    <string name="cd_adjust_corners">Adjust corners</string>
+    <string name="filter_original">Original</string>
+    <string name="filter_rectified">Rectified</string>
+    <string name="filter_bw">B&amp;W</string>
+    <string name="filter_contrast">Contrast</string>
+    <string name="filter_even_light">Even Light</string>
+    <string name="cd_select_format">Select format</string>
+    <string name="cd_lock_aspect_ratio">Lock aspect ratio</string>
+    <string name="cd_unlock_aspect_ratio">Unlock aspect ratio</string>
+    <string name="cd_original_photo">Original photo</string>
+    <string name="cd_filtered_document">Filtered document</string>
+    <string name="cd_rectified_document">Rectified document</string>
+    <string name="action_share">Share</string>
+    <string name="action_save">Save</string>
+
+    <!-- Corner adjust screen -->
+    <string name="title_adjust_corners">Adjust Corners</string>
+    <string name="cd_cancel">Cancel</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_apply">Apply</string>
+    <string name="cd_document_to_adjust">Document to adjust</string>
+
+    <!-- Gallery screen -->
+    <string name="action_select_photo">Select Photo</string>
+    <string name="loading_image">Loading image&#8230;</string>
+    <string name="rectifying_document">Rectifying document&#8230;</string>
+    <string name="saved_to_gallery">Saved to gallery</string>
+    <string name="save_failed">Save failed</string>
+
+    <!-- Settings screen -->
+    <string name="title_settings">Settings</string>
+    <string name="cd_back">Back</string>
+    <string name="section_capture">Capture</string>
+    <string name="setting_auto_capture">Auto-capture</string>
+    <string name="setting_auto_capture_desc">Automatically capture when a stable document is detected</string>
+    <string name="setting_haptic">Haptic feedback</string>
+    <string name="setting_haptic_desc">Vibrate on capture</string>
+    <string name="setting_flash">Flash</string>
+    <string name="setting_flash_desc">Enable camera torch for low-light scanning</string>
+    <string name="setting_debug">Debug overlay</string>
+    <string name="setting_debug_desc">Show detection latency on camera preview</string>
+    <string name="section_aspect_ratio">Aspect Ratio</string>
+    <string name="setting_ar_auto">Aspect ratio default</string>
+    <string name="setting_ar_auto_desc">When enabled, automatically estimates the document\'s aspect ratio. When disabled, defaults to A4.</string>
+    <string name="section_output">Output</string>
+    <string name="setting_wb">Auto white balance</string>
+    <string name="setting_wb_desc">Automatically correct color cast from outdoor lighting</string>
+    <string name="setting_format">Format</string>
+    <string name="setting_quality">Quality</string>
+    <string name="setting_quality_value">%1$d%%</string>
+    <string name="setting_default_filter">Default filter</string>
+    <string name="filter_none">None</string>
+    <string name="section_about">About</string>
+    <string name="setting_show_tutorial">Show tutorial</string>
+    <string name="setting_show_tutorial_desc">Replay the getting-started walkthrough</string>
+    <string name="setting_privacy_policy">Privacy Policy</string>
+    <string name="setting_privacy_policy_desc">No data collection — everything stays on your device</string>
+    <string name="setting_send_feedback">Send Feedback</string>
+    <string name="setting_send_feedback_desc">Report issues or suggest features on GitHub</string>
+    <string name="setting_version">Version</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_title_1">Point at any document</string>
+    <string name="onboarding_desc_1">Hold your phone over a document — DocShot detects the edges automatically in real time.</string>
+    <string name="onboarding_title_2">Auto-capture when steady</string>
+    <string name="onboarding_desc_2">Keep the camera still for a moment. DocShot locks focus and captures automatically — no button tap needed.</string>
+    <string name="onboarding_title_3">Adjust and share</string>
+    <string name="onboarding_desc_3">Fine-tune aspect ratio, apply filters, then save to gallery or share directly.</string>
 </resources>

@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.docshot.R
@@ -86,7 +87,7 @@ fun GalleryScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     }) {
-                        Text("Select Photo")
+                        Text(stringResource(R.string.action_select_photo))
                     }
                 }
             }
@@ -100,7 +101,7 @@ fun GalleryScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Loading image...")
+                    Text(stringResource(R.string.loading_image))
                 }
             }
         }
@@ -127,7 +128,7 @@ fun GalleryScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Rectifying document...")
+                    Text(stringResource(R.string.rectifying_document))
                 }
             }
         }
@@ -137,7 +138,7 @@ fun GalleryScreen(
                 data = current.data,
                 onSave = { bitmap ->
                     viewModel.saveResult(context, bitmap) { success ->
-                        val msg = if (success) "Saved to gallery" else "Save failed"
+                        val msg = context.getString(if (success) R.string.saved_to_gallery else R.string.save_failed)
                         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                     }
                 },
