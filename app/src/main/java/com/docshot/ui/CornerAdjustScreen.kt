@@ -225,25 +225,44 @@ private fun MagnifierLoupe(
     ) {
         val loupePx = size.width
 
-        // Source region in image pixels: area around the corner at LOUPE_ZOOM magnification
+        // Source region in image pixels: area around the corner at LOUPE_ZOOM magnification.
+        // This region can extend beyond image bounds when the corner is near an edge.
         val srcSizePx = (loupePx / LOUPE_ZOOM)
         val halfSrc = srcSizePx / 2f
 
-        val srcX = (center.x.toFloat() - halfSrc).coerceIn(0f, (imageWidth - srcSizePx).coerceAtLeast(0f))
-        val srcY = (center.y.toFloat() - halfSrc).coerceIn(0f, (imageHeight - srcSizePx).coerceAtLeast(0f))
+        // Ideal (unclamped) source region centered on the corner
+        val idealSrcX = center.x.toFloat() - halfSrc
+        val idealSrcY = center.y.toFloat() - halfSrc
+
+        // Fill entire loupe with neutral background for out-of-bounds pixels
+        drawRect(Color(0xFF2A2A2A))
+
+        // Clamp to valid image bounds to get the drawable sub-region
+        val clampedSrcX = idealSrcX.coerceAtLeast(0f)
+        val clampedSrcY = idealSrcY.coerceAtLeast(0f)
+        val clampedSrcRight = (idealSrcX + srcSizePx).coerceAtMost(imageWidth.toFloat())
+        val clampedSrcBottom = (idealSrcY + srcSizePx).coerceAtMost(imageHeight.toFloat())
+
+        val validW = (clampedSrcRight - clampedSrcX).roundToInt().coerceAtLeast(1)
+        val validH = (clampedSrcBottom - clampedSrcY).roundToInt().coerceAtLeast(1)
+
+        // Destination offset: where the valid region starts within the loupe
+        val dstOffsetX = ((clampedSrcX - idealSrcX) / srcSizePx * loupePx).roundToInt()
+        val dstOffsetY = ((clampedSrcY - idealSrcY) / srcSizePx * loupePx).roundToInt()
+        val dstW = (validW.toFloat() / srcSizePx * loupePx).roundToInt().coerceAtLeast(1)
+        val dstH = (validH.toFloat() / srcSizePx * loupePx).roundToInt().coerceAtLeast(1)
 
         drawImage(
             image = imageBitmap,
-            srcOffset = IntOffset(srcX.roundToInt(), srcY.roundToInt()),
-            srcSize = IntSize(srcSizePx.roundToInt().coerceAtLeast(1), srcSizePx.roundToInt().coerceAtLeast(1)),
-            dstSize = IntSize(loupePx.roundToInt(), loupePx.roundToInt())
+            srcOffset = IntOffset(clampedSrcX.roundToInt(), clampedSrcY.roundToInt()),
+            srcSize = IntSize(validW, validH),
+            dstOffset = IntOffset(dstOffsetX, dstOffsetY),
+            dstSize = IntSize(dstW, dstH)
         )
 
-        // Crosshair tracks the actual corner position within the (possibly clamped) source region.
-        // When the corner is near an image edge, srcX/srcY are clamped so the crop stops moving —
-        // the crosshair must shift to reflect where the corner really is inside that crop.
-        val cx = (center.x.toFloat() - srcX) / srcSizePx * loupePx
-        val cy = (center.y.toFloat() - srcY) / srcSizePx * loupePx
+        // Crosshair always at center of loupe
+        val cx = loupePx / 2f
+        val cy = loupePx / 2f
         val crossLen = 12.dp.toPx()
         val crossStroke = 2.dp.toPx()
 
