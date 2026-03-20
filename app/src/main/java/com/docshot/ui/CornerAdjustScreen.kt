@@ -239,9 +239,11 @@ private fun MagnifierLoupe(
             dstSize = IntSize(loupePx.roundToInt(), loupePx.roundToInt())
         )
 
-        // Crosshair at center of loupe
-        val cx = loupePx / 2f
-        val cy = loupePx / 2f
+        // Crosshair tracks the actual corner position within the (possibly clamped) source region.
+        // When the corner is near an image edge, srcX/srcY are clamped so the crop stops moving —
+        // the crosshair must shift to reflect where the corner really is inside that crop.
+        val cx = (center.x.toFloat() - srcX) / srcSizePx * loupePx
+        val cy = (center.y.toFloat() - srcY) / srcSizePx * loupePx
         val crossLen = 12.dp.toPx()
         val crossStroke = 2.dp.toPx()
 
