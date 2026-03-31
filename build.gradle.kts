@@ -13,3 +13,12 @@ subprojects {
         }
     }
 }
+
+// Ensure all Android modules use NDK r29 for 16KB page size support (Play Store requirement)
+subprojects {
+    plugins.withType<com.android.build.gradle.BasePlugin> {
+        extensions.configure<com.android.build.gradle.BaseExtension> {
+            ndkVersion = "29.0.14206865"
+        }
+    }
+}

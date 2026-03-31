@@ -17,14 +17,14 @@ android {
     namespace = "com.docshot"
     compileSdk = 36
 
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.docshot"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3000013
-        versionName = "1.3.1"
+        versionCode = 3000014
+        versionName = "1.3.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -101,6 +101,12 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 
     buildFeatures {
