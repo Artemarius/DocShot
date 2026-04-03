@@ -7,7 +7,7 @@ Zero-tap document scanning for Android. Point your camera at a document — DocS
 </p>
 
 <p align="center">
-  <img src="docs/demo.gif" alt="DocShot demo" width="300">
+  <img src="docs/demo_result_flow.gif" alt="DocShot result flow" width="300">
 </p>
 
 ## Motivation
@@ -33,6 +33,12 @@ Every phone has a document scanner buried 3 taps deep in the camera app, and it 
 - **First-launch onboarding** — 3-page interactive walkthrough introducing camera detection, auto-capture, and result screen features
 - **Localization-ready** — All UI strings externalized to `strings.xml` for easy translation
 - **In-app privacy policy & feedback** — Direct links in Settings to privacy policy and GitHub Issues
+
+<p align="center">
+  <img src="docs/demo.gif" alt="DocShot scanning demo" width="270">
+  &nbsp;&nbsp;
+  <img src="docs/demo_corner_adjust.gif" alt="Corner adjustment & rotation" width="270">
+</p>
 
 ## How It Works
 
