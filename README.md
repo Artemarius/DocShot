@@ -8,6 +8,8 @@ Zero-tap document scanning for Android. Point your camera at a document — DocS
 
 <p align="center">
   <img src="docs/demo_result_flow.gif" alt="DocShot result flow" width="300">
+  <br>
+  <a href="https://youtube.com/shorts/PlQEvZvwrHc">▶ Watch full demo</a>
 </p>
 
 ## Motivation
